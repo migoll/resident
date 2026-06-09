@@ -1,0 +1,13 @@
+{
+  "name": "resident",
+  "version": "0.2.0",
+  "description": "The agent that doesn't wait to be prompted — an always-on custodian for your repos.",
+  "type": "module",
+  "bin": {
+    "resident": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts start",
+    "once": "bun src/cli.ts once"
+  }
+}
