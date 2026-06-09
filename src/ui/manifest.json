@@ -1,0 +1,10 @@
+{
+  "name": "Resident",
+  "short_name": "Resident",
+  "description": "The agent that doesn't wait to be prompted.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#151517",
+  "theme_color": "#151517",
+  "icons": [{ "src": "/icon.png", "sizes": "1024x1024", "type": "image/png" }]
+}

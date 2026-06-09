@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util'
+import { existsSync } from 'node:fs'
 import { loadConfig, saveConfig, discoverRepos, DEFAULTS, CONFIG_PATH, type Config } from './config'
 import { openStore } from './store'
 import { cycle, startLoop, type DaemonState } from './daemon'
@@ -34,6 +35,7 @@ const { values, positionals } = parseArgs({
     investigations: { type: 'string' },
     port: { type: 'string' },
     lan: { type: 'boolean', default: false },
+    app: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
   allowPositionals: true,
@@ -135,7 +137,13 @@ ${B}resident status${R}
       const out = r.stdout.toString().trim()
       if (r.exitCode === 0 && out.startsWith('http')) url = out
     } catch {}
-    Bun.spawn(['open', url], { stdout: 'ignore', stderr: 'ignore' })
+    // --app: own chromeless window — feels like a desktop app, not a tab
+    const chrome = '/Applications/Google Chrome.app'
+    if (values.app && existsSync(chrome)) {
+      Bun.spawn(['open', '-na', 'Google Chrome', '--args', '--app=' + url, '--window-size=980,820'], { stdout: 'ignore', stderr: 'ignore' })
+    } else {
+      Bun.spawn(['open', url], { stdout: 'ignore', stderr: 'ignore' })
+    }
     console.log(url)
     break
   }

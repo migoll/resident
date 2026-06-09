@@ -45,6 +45,14 @@ export function startServer(deps: {
       if (url.pathname === '/') {
         return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } })
       }
+      if (url.pathname === '/icon.png') {
+        return new Response(Bun.file(new URL('./ui/icon.png', import.meta.url).pathname))
+      }
+      if (url.pathname === '/manifest.json') {
+        return new Response(Bun.file(new URL('./ui/manifest.json', import.meta.url).pathname), {
+          headers: { 'content-type': 'application/manifest+json' },
+        })
+      }
 
       if (url.pathname === '/api/state') {
         refreshRepoUrls()
