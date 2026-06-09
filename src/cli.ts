@@ -33,6 +33,7 @@ const { values, positionals } = parseArgs({
   options: {
     investigations: { type: 'string' },
     port: { type: 'string' },
+    lan: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
   allowPositionals: true,
@@ -83,7 +84,13 @@ switch (cmd) {
     const store = openStore()
     const state: DaemonState = { nextCycleAt: 0, cycling: false, lastCycle: null }
     if (values.port) process.env.PORT = values.port
+    if (values.lan) cfg.bind = '0.0.0.0' // reachable from other devices (pair with Tailscale off home Wi-Fi)
     const srv = startServer({ cfg, store, state, log, requestCycle: () => state.wake?.() })
+    if (values.lan) {
+      const ip = Bun.spawnSync(['ipconfig', 'getifaddr', 'en0'], { stdout: 'pipe', stderr: 'pipe' }).stdout.toString().trim()
+      console.log(`${Y}  ⚠ inbox bound to all interfaces — no auth; trust your network (or use Tailscale).${R}`)
+      if (ip) console.log(`  from other devices: ${C}http://${ip}:${srv.port}${R}\n`)
+    }
 
     // stable URL via portless if available (alias → https://resident.localhost)
     let url = `http://localhost:${srv.port}`

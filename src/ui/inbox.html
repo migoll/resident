@@ -60,8 +60,16 @@
     font-size: 11.5px; font-weight: 500; color: var(--text2);
     background: var(--panel); border: 1px solid var(--line);
     padding: 4px 10px; border-radius: 100px; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px;
   }
-  a.chip:hover { color: var(--accent); border-color: rgba(10, 132, 255, 0.4); }
+  .chip a { color: inherit; text-decoration: none; }
+  .chip a:hover { color: var(--accent); }
+  .chip .x { cursor: pointer; opacity: 0; transition: opacity .15s, color .15s; font-size: 13px; line-height: 1; }
+  .chip:hover .x { opacity: .7; }
+  .chip .x:hover { color: var(--red); opacity: 1; }
+  .chip.add { cursor: pointer; border-style: dashed; }
+  .chip.add:hover { color: var(--accent); border-color: rgba(10, 132, 255, 0.4); }
+  .chip input { border: 0; background: transparent; outline: none; color: var(--text); font: inherit; font-size: 11.5px; width: 270px; }
 
   h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text2); margin: 28px 0 12px; }
   h2 .n { color: var(--text); }
@@ -267,6 +275,43 @@
   }
   window.act = act
 
+  // ---- watchlist editing
+  let adding = false
+  function renderChips() {
+    const chip = (label, href, key) =>
+      '<span class="chip">' + (href ? '<a target="_blank" href="' + esc(href) + '">' + esc(label) + ' ↗</a>' : esc(label))
+      + '<span class="x" data-k="' + esc(key) + '" title="stop watching">×</span></span>'
+    $('#chips').innerHTML = state.watching.repos.map((r) => chip(r, state.repoUrls && state.repoUrls[r], r)).join('')
+      + state.watching.urls.map((u) => chip('🌐 ' + u.replace(/^https?:\/\//, ''), u, u)).join('')
+      + '<span class="chip add" id="addChip">＋ watch repo or url</span>'
+  }
+  async function sendWatch(body) {
+    const r = await fetch('/api/watch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    return r.json()
+  }
+  document.addEventListener('click', async (e) => {
+    const x = e.target.closest('.chip .x')
+    if (x) { await sendWatch({ remove: x.dataset.k }); refresh(); return }
+    const add = e.target.closest('#addChip')
+    if (add && !adding) {
+      adding = true
+      add.classList.remove('add')
+      add.innerHTML = '<input placeholder="/path/to/repo or https://site.com" spellcheck="false">'
+      const inp = add.querySelector('input')
+      inp.focus()
+      inp.addEventListener('keydown', async (ev) => {
+        if (ev.key === 'Escape') { adding = false; renderChips(); return }
+        if (ev.key !== 'Enter') return
+        ev.preventDefault()
+        const v = inp.value.trim()
+        if (!v) return
+        const j = await sendWatch({ add: v })
+        if (j.ok) { adding = false; refresh() }
+        else { inp.value = ''; inp.placeholder = j.error || 'failed — try again' }
+      })
+    }
+  })
+
   async function refresh() {
     try {
       state = await (await fetch('/api/state')).json()
@@ -280,11 +325,7 @@
     $('#budget').textContent = state.usedToday + '/' + state.budgets.perDay + ' investigations today'
       + (state.costToday ? ' · $' + state.costToday.toFixed(2) + ' AI usage (investigations + approvals)' : '')
 
-    $('#chips').innerHTML = state.watching.repos.map((r) => {
-      const u = state.repoUrls && state.repoUrls[r]
-      return u ? '<a class="chip" target="_blank" href="' + esc(u) + '">' + esc(r) + ' ↗</a>' : '<span class="chip">' + esc(r) + '</span>'
-    }).join('')
-      + state.watching.urls.map((u) => '<a class="chip" target="_blank" href="' + esc(u) + '">🌐 ' + esc(u.replace(/^https?:\/\//, '')) + '</a>').join('')
+    if (!adding) renderChips()
 
     const items = state.items
     const front = items.filter((i) => ['ready', 'investigating', 'approving', 'working', 'approved', 'tracked'].includes(i.status))

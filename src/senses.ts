@@ -30,6 +30,8 @@ const DAY = 86_400_000
 // ---------------------------------------------------------------- git
 async function gitSense(repo: RepoCfg): Promise<Finding[]> {
   const out: Finding[] = []
+  // server mode: keep dedicated-machine clones fresh before judging them
+  if (repo.pull) await run(['git', 'pull', '--ff-only', '--quiet'], repo.path, 60_000)
   const f = (kind: string, title: string, detail: string, score: number, key = '') =>
     out.push({ sense: 'git', repo: repo.name, kind, title, detail, score, hash: h(`git|${repo.name}|${kind}|${key}`) })
 

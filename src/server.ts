@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs'
-import type { Config } from './config'
+import { existsSync, readFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import { homedir } from 'node:os'
+import { saveConfig, type Config } from './config'
 import type { Store } from './store'
 import type { DaemonState } from './daemon'
 import { approve } from './hands'
@@ -20,7 +22,8 @@ export function startServer(deps: {
   const repoUrls: Record<string, string> = {}
   let repoUrlsAt = 0
   function refreshRepoUrls() {
-    if (Object.keys(repoUrls).length || Date.now() - repoUrlsAt < 60_000) return
+    const missing = cfg.repos.some((r) => !(r.name in repoUrls))
+    if (!missing || Date.now() - repoUrlsAt < 60_000) return
     repoUrlsAt = Date.now()
     for (const r of cfg.repos) {
       try {
@@ -35,7 +38,7 @@ export function startServer(deps: {
 
   const server = Bun.serve({
     port,
-    hostname: '127.0.0.1',
+    hostname: process.env.RESIDENT_BIND ?? cfg.bind ?? '127.0.0.1',
     async fetch(req) {
       const url = new URL(req.url)
 
@@ -63,6 +66,45 @@ export function startServer(deps: {
       if (url.pathname === '/api/cycle' && req.method === 'POST') {
         deps.requestCycle()
         return Response.json({ ok: true })
+      }
+
+      // watchlist editing: {add: "<url or repo path>"} or {remove: "<url or repo name>"}
+      // cfg is shared by reference with the daemon, so changes apply from the next cycle.
+      if (url.pathname === '/api/watch' && req.method === 'POST') {
+        let body: any
+        try { body = await req.json() } catch { return Response.json({ ok: false, error: 'bad json' }, { status: 400 }) }
+
+        if (typeof body.add === 'string' && body.add.trim()) {
+          const v = body.add.trim()
+          if (/^https?:\/\//.test(v)) {
+            if (cfg.urls.includes(v)) return Response.json({ ok: false, error: 'already watching that url' }, { status: 400 })
+            cfg.urls.push(v)
+            log(`+ watching url ${v}`)
+          } else {
+            const path = v.replace(/^~(?=\/|$)/, homedir()).replace(/\/$/, '')
+            if (!existsSync(join(path, '.git'))) return Response.json({ ok: false, error: 'not a git repo (no .git at that path)' }, { status: 400 })
+            const name = basename(path)
+            if (cfg.repos.some((r) => r.name === name || r.path === path))
+              return Response.json({ ok: false, error: 'already watching that repo' }, { status: 400 })
+            cfg.repos.push({ path, name })
+            repoUrlsAt = 0
+            refreshRepoUrls() // pick up its github link immediately
+            log(`+ watching repo ${name}`)
+          }
+        } else if (typeof body.remove === 'string' && body.remove.trim()) {
+          const v = body.remove.trim()
+          const ri = cfg.repos.findIndex((r) => r.name === v)
+          const ui = cfg.urls.indexOf(v)
+          if (ri >= 0) { cfg.repos.splice(ri, 1); delete repoUrls[v]; log(`− stopped watching repo ${v}`) }
+          else if (ui >= 0) { cfg.urls.splice(ui, 1); log(`− stopped watching url ${v}`) }
+          else return Response.json({ ok: false, error: 'not found' }, { status: 404 })
+        } else {
+          return Response.json({ ok: false, error: 'need add or remove' }, { status: 400 })
+        }
+
+        saveConfig(cfg)
+        deps.requestCycle()
+        return Response.json({ ok: true, repos: cfg.repos.map((r) => r.name), urls: cfg.urls })
       }
 
       const m = url.pathname.match(/^\/api\/item\/(\d+)\/(dismiss|approve|restore|reinvestigate|issue)$/)

@@ -35,6 +35,20 @@ resident open    # open the inbox
 
 Config lives in `~/.resident/config.json`: repos, watched URLs, cycle interval, budgets, optional `"model"` override (e.g. `"sonnet"` for cheaper investigations). State in `~/.resident/resident.db`, investigation transcripts in `~/.resident/runs/`.
 
+## Run it on a spare machine
+
+An old MacBook, a Mac mini, a home server — the same boxes people park OpenClaw on — make a perfect "residence": always on, always watching, while you read the inbox from any device.
+
+```sh
+# on the spare machine (logged into claude + gh once):
+git clone <your repos> ~/repos/...     # resident scans local clones
+resident init                          # then edit ~/.resident/config.json:
+#   "repos": [{ "path": "...", "name": "...", "pull": true }]   ← pull:true keeps clones fresh
+resident start --lan                   # binds 0.0.0.0, prints the URL for your other devices
+```
+
+Notes for laptop-as-server: keep it on power and enable *Prevent automatic sleeping when display is off* (System Settings → Battery → Options) so it works with the lid closed. The inbox has no auth — on anything beyond your home network, put it behind [Tailscale](https://tailscale.com) and reach it via the tailnet IP from your phone anywhere.
+
 ## The authority model
 
 Everything autonomous is **read-only by design** — the investigation toolset cannot write. Writes happen only on a human click, and even then on a disposable worktree branch, never your checkout, never `main`. Budgets cap the AI spend per cycle and per day; the inbox header shows running usage. Graduated autonomy (auto-merge for trivial, well-tested classes of fix) is on the roadmap, gated behind trust earned per repo — not a default.

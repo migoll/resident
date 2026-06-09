@@ -10,6 +10,8 @@ export interface RepoCfg {
   name: string
   /** run `bun run typecheck` each cycle if the script exists (default true) */
   checks?: boolean
+  /** git pull --ff-only before each scan — for dedicated/server machines watching clones */
+  pull?: boolean
 }
 
 export interface Config {
@@ -17,6 +19,8 @@ export interface Config {
   budgets: { perCycle: number; perDay: number }
   /** optional model override for investigations, e.g. "haiku" */
   model?: string
+  /** interface for the inbox server (default 127.0.0.1; "0.0.0.0" for LAN/Tailscale access) */
+  bind?: string
   urls: string[]
   repos: RepoCfg[]
 }
