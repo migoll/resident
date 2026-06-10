@@ -125,7 +125,7 @@ export async function cycle(
       const escalate = !!item.escalate
       const model = investigationModel(cfg, item.score, escalate)
       log(`  ⚒ investigating: ${item.title} [${item.repo}] · ${model}${escalate ? ' (escalated)' : ''}`)
-      store.update(item.id, { status: 'investigating', model, escalate: 0 })
+      store.update(item.id, { status: 'investigating', model, escalate: 0, reason: null }) // clear stale queued/requeue reason
       store.bumpToday()
       const res = await investigate(item, repo.path, model)
       store.addCost(res.cost)
