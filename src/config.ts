@@ -44,8 +44,8 @@ export const DEFAULTS: Config = {
 /** Tiering defaults: routine digs run cheap; only high-signal/asked-for ones pay for the big model. */
 export const MODEL_DEFAULTS = { base: 'sonnet', escalated: 'opus', escalateScore: 85 } as const
 
-/** Which model investigates this item. Legacy `model` pins everything; otherwise base, escalating
- *  on a high score or an explicit Re-investigate. Returns undefined only if a pin was set to "". */
+/** Which model investigates this item. Legacy `model` pins everything; otherwise base,
+ *  escalating on a high score or an explicit Re-investigate. Always returns a model string. */
 export function investigationModel(cfg: Config, score: number, escalate = false): string {
   if (cfg.model) return cfg.model
   const base = cfg.models?.base ?? MODEL_DEFAULTS.base
@@ -54,10 +54,18 @@ export function investigationModel(cfg: Config, score: number, escalate = false)
   return escalate || score >= threshold ? escalated : base
 }
 
-// chaining / redirection / subshell / newline — no place in an allowlisted package command, and a
-// signal the proposal is trying to do more than it claims. (Commands also run shell-less, so these are
-// inert at execution; rejecting them is defence-in-depth + keeps the allowlist honest.)
-const SHELL_META = /[;&|`$<>(){}\n]/
+/** Model for the apply/approve step (applying an already-written diff, opening the PR — mechanical
+ *  work): the cheap base tier unless the legacy pin is set. Never fall through to the CLI's own
+ *  default model — that follows the user's interactive setting and silently changes Resident's costs. */
+export function applyModel(cfg: Config): string {
+  return cfg.model ?? cfg.models?.base ?? MODEL_DEFAULTS.base
+}
+
+// chaining / redirection / subshell / newline+CR — no place in an allowlisted package command, and a
+// signal the proposal is trying to do more than it claims. Quotes/backslash are rejected too: commands
+// run shell-less (arg-array spawn), so quoting is never meaningful — a quoted token would be passed
+// literally and misbehave. (Metachars are equally inert at execution; rejecting is defence-in-depth.)
+const SHELL_META = /[;&|`$<>(){}'"\\\n\r]/
 
 /** True only if `cmd` is a single, metachar-free command whose leading tokens match one of the repo's
  *  allowed prefixes on a token boundary (so "bun update" allows "bun update zod" but not "bun updatex"). */

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
-import { saveConfig, commandAllowed, type Config } from './config'
+import { saveConfig, commandAllowed, applyModel, type Config } from './config'
 import type { Store } from './store'
 import type { DaemonState } from './daemon'
 import { approve, applyCommand } from './hands'
@@ -139,7 +139,7 @@ export function startServer(deps: {
 
         // fresh eyes: requeue and re-run on the STRONG model (costs one budget unit)
         if (action === 'reinvestigate') {
-          store.update(item.id, { status: 'queued', evidence: null, patch: null, escalate: 1, reason: 'fresh look requested by you — escalating to the strong model' })
+          store.update(item.id, { status: 'queued', evidence: null, patch: null, command: null, escalate: 1, reason: 'fresh look requested by you — escalating to the strong model' })
           deps.requestCycle()
           return Response.json({ ok: true })
         }
@@ -187,7 +187,9 @@ export function startServer(deps: {
         store.update(item.id, { status: 'approving' })
         ;(async () => {
           log(`⚒ approving #${item.id}: ${item.title}${useCommand ? ` · $ ${item.command}` : ''}`)
-          const res = useCommand ? await applyCommand(item, repo.path) : await approve(item, repo.path, cfg.model)
+          // applyModel, never bare cfg.model: with no pin set, runClaude would omit --model and inherit
+          // whatever the user's interactive CLI default happens to be — an invisible cost change
+          const res = useCommand ? await applyCommand(item, repo.path) : await approve(item, repo.path, applyModel(cfg))
           store.addCost(res.cost)
           if (res.ok) {
             store.update(item.id, { status: 'approved', pr_url: res.pr_url, cost: item.cost + res.cost })

@@ -59,9 +59,11 @@ function extractDiff(text: string): string | null {
 function extractCommand(text: string): string | null {
   const m = text.match(/```(?:sh|bash|shell)\n([\s\S]*?)```/)
   if (!m) return null
-  // first real command line, stripping a leading "$ " prompt and comment/blank lines
-  const first = m[1].split('\n').map((s) => s.replace(/^\$\s*/, '').trim()).find((s) => s && !s.startsWith('#'))
-  return first || null
+  // real command lines, stripping "$ " prompts and comment/blank lines
+  const lines = m[1].split('\n').map((s) => s.replace(/^\$\s*/, '').trim()).filter((s) => s && !s.startsWith('#'))
+  // the contract is ONE command — if the model stacked several, refuse to extract rather than
+  // silently run a subset of what the evidence shows
+  return lines.length === 1 ? lines[0] : null
 }
 
 /** Minimal shell-less command runner for the deterministic command-fix path. */
@@ -194,22 +196,32 @@ export async function applyCommand(item: Item, repoPath: string) {
   if (hasRemote) await sh(['git', 'fetch', 'origin', '--quiet'], repoPath, 120_000)
   const base = await defaultBase(repoPath, hasRemote)
 
-  // fresh, retry-safe worktree (clear any stale one from an interrupted run first)
+  // fresh, retry-safe worktree: clear stale registrations AND a stale dir (a crashed run can leave
+  // a dir git no longer tracks — `worktree remove` alone won't recover that, `add` would then fail)
   await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
+  await sh(['git', 'worktree', 'prune'], repoPath)
+  await sh(['rm', '-rf', worktree], repoPath)
   const add = await sh(['git', 'worktree', 'add', worktree, '-B', branch, base], repoPath)
   steps.push(`worktree add -B ${branch} ${base}\n${add.out}`)
   if (!add.ok) return done(false, null)
 
-  // run the approved command IN the worktree, never the user's checkout
-  const ran = await sh(tokens, worktree, 180_000)
+  // run the approved command IN the worktree, never the user's checkout (generous timeout: cold installs)
+  const ran = await sh(tokens, worktree, 300_000)
   steps.push(`$ ${tokens.join(' ')}\n${ran.out}`)
+
+  // a failed command is a failure even if it changed nothing — check this BEFORE no-changes
+  if (!ran.ok) {
+    await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
+    steps.push('→ command exited non-zero — worktree discarded')
+    return done(false, null)
+  }
 
   await sh(['git', 'add', '-A'], worktree)
   const noChanges = (await sh(['git', 'diff', '--cached', '--quiet'], worktree)).ok // exit 0 = nothing staged
-  if (noChanges || !ran.ok) {
+  if (noChanges) {
     await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
-    steps.push(noChanges ? '→ command produced no changes — nothing to PR' : '→ command exited non-zero')
-    return done(false, null, { noChanges })
+    steps.push('→ command succeeded but produced no changes — nothing to PR')
+    return done(false, null, { noChanges: true })
   }
 
   const msg = `${(item.title || 'fix').replace(/"/g, "'")} (via Resident)`
@@ -218,13 +230,21 @@ export async function applyCommand(item: Item, repoPath: string) {
 
   let prUrl: string | null = null
   if (hasRemote && commit.ok) {
-    const push = await sh(['git', 'push', '-u', 'origin', branch, '--quiet'], worktree, 120_000)
+    // force-with-lease: the resident/<id>-* branch is ours by construction, and a RETRY of an
+    // interrupted run re-creates it from base — a plain push would be rejected as non-fast-forward
+    const push = await sh(['git', 'push', '-u', 'origin', branch, '--quiet', '--force-with-lease'], worktree, 120_000)
     steps.push(push.out)
     if (push.ok) {
       const body = `Proposed by Resident, human-approved.\n\nFix run: \`${tokens.join(' ')}\`\n\n${(item.evidence ?? '').slice(0, 3000)}`
       const pr = await sh(['gh', 'pr', 'create', '--title', msg, '--body', body, '--head', branch], worktree, 120_000)
       steps.push(pr.out)
       prUrl = pr.out.match(/https?:\/\/\S+/)?.[0] ?? null
+      if (!prUrl) {
+        // pr create fails if a PR already exists for this branch (retry) — recover its URL instead of failing
+        const ls = await sh(['gh', 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'url'], worktree, 60_000)
+        try { prUrl = JSON.parse(ls.out)[0]?.url ?? null } catch {}
+        if (prUrl) steps.push(`→ PR already existed, recovered: ${prUrl}`)
+      }
     }
   }
 

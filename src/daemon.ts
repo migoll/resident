@@ -125,12 +125,14 @@ export async function cycle(
       const escalate = !!item.escalate
       const model = investigationModel(cfg, item.score, escalate)
       log(`  ⚒ investigating: ${item.title} [${item.repo}] · ${model}${escalate ? ' (escalated)' : ''}`)
-      store.update(item.id, { status: 'investigating', model, escalate: 0, reason: null }) // clear stale queued/requeue reason
+      // NB: escalate is consumed on SUCCESS, not here — so a dig interrupted by a restart keeps its
+      // tier when reconcile() requeues it (and a failed escalated dig retries escalated)
+      store.update(item.id, { status: 'investigating', model, reason: null }) // clear stale queued/requeue reason
       store.bumpToday()
       const res = await investigate(item, repo.path, model)
       store.addCost(res.cost)
       if (res.ok) {
-        store.update(item.id, { status: 'ready', evidence: res.evidence, patch: res.patch, command: res.command, cost: res.cost })
+        store.update(item.id, { status: 'ready', evidence: res.evidence, patch: res.patch, command: res.command, cost: res.cost, escalate: 0 })
         const fix = res.patch ? 'fix proposed' : res.command ? `command proposed: ${res.command}` : 'no patch'
         log(`    → ready (${fix}, ${model}, $${res.cost.toFixed(2)})`)
         notify(cfg, 'Resident: ready for you', `${item.title} [${item.repo}]${res.patch ? ' — fix proposed, one tap to PR' : res.command ? ` — command proposed: ${res.command}` : ''}`)

@@ -133,3 +133,10 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   Approve runs it deterministically (no AI, no shell) in a disposable worktree → PR, gated by a
   per-repo command allowlist (`repo.commands`, server-enforced, empty by default). Closes the
   day-one lockfile gap.
+- 2026-06-10 — review-hardening pass (requested after the day's two features): approve step now
+  pins to the base model via applyModel() — it had been inheriting the user's interactive CLI
+  default, which silently became Fable 5 (2× opus cost) that afternoon; escalation now survives
+  daemon restarts (consumed on success, not at dig start); failed commands no longer report as
+  "no changes"; applyCommand retries are idempotent (worktree prune + force-with-lease + existing-PR
+  URL recovery); extractCommand refuses multi-command blocks; SHELL_META also rejects \r, quotes,
+  backslash; reinvestigate clears stale command proposals.
