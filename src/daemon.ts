@@ -130,9 +130,10 @@ export async function cycle(
       const res = await investigate(item, repo.path, model)
       store.addCost(res.cost)
       if (res.ok) {
-        store.update(item.id, { status: 'ready', evidence: res.evidence, patch: res.patch, cost: res.cost })
-        log(`    → ready (${res.patch ? 'fix proposed' : 'no patch'}, ${model}, $${res.cost.toFixed(2)})`)
-        notify(cfg, 'Resident: ready for you', `${item.title} [${item.repo}]${res.patch ? ' — fix proposed, one tap to PR' : ''}`)
+        store.update(item.id, { status: 'ready', evidence: res.evidence, patch: res.patch, command: res.command, cost: res.cost })
+        const fix = res.patch ? 'fix proposed' : res.command ? `command proposed: ${res.command}` : 'no patch'
+        log(`    → ready (${fix}, ${model}, $${res.cost.toFixed(2)})`)
+        notify(cfg, 'Resident: ready for you', `${item.title} [${item.repo}]${res.patch ? ' — fix proposed, one tap to PR' : res.command ? ` — command proposed: ${res.command}` : ''}`)
       } else {
         // killed/timed-out runs spend real money before dying — record the estimate so the budget ledger isn't fooled
         store.update(item.id, {

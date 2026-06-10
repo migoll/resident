@@ -31,6 +31,8 @@ export interface Item {
   status: ItemStatus
   evidence: string | null
   patch: string | null
+  /** a shell command proposed as the fix instead of a diff (lockfile refresh, dep bump) */
+  command: string | null
   pr_url: string | null
   cost: number
   reason: string | null
@@ -63,7 +65,8 @@ export function openStore() {
     cost REAL NOT NULL DEFAULT 0,
     reason TEXT,
     model TEXT,
-    escalate INTEGER NOT NULL DEFAULT 0
+    escalate INTEGER NOT NULL DEFAULT 0,
+    command TEXT
   )`)
   db.run(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
 
@@ -71,6 +74,7 @@ export function openStore() {
   for (const stmt of [
     'ALTER TABLE items ADD COLUMN model TEXT',
     'ALTER TABLE items ADD COLUMN escalate INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE items ADD COLUMN command TEXT',
   ]) {
     try { db.run(stmt) } catch {}
   }

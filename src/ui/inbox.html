@@ -116,6 +116,7 @@
     max-height: 420px; overflow: auto; color: #d8d8de;
   }
   pre.fix { border-color: rgba(10, 132, 255, 0.25); }
+  pre.fix.cmd { border-color: rgba(48, 209, 88, 0.35); color: #7ee787; }
   pre .add { color: #4cd964; }
   pre .del { color: #ff6961; }
   pre .hunk { color: #6fb3ff; }
@@ -213,7 +214,11 @@
     let actions = ''
     if (i.status === 'ready') {
       actions = '<div class="actions">'
-        + (i.patch ? '<button class="btn primary" onclick="act(' + i.id + ',\'approve\')">Approve → branch + PR</button>' : '')
+        + (i.patch ? '<button class="btn primary" onclick="act(' + i.id + ',\'approve\')">Approve → branch + PR</button>'
+            : i.command ? (i.commandAllowed
+                ? '<button class="btn primary" onclick="act(' + i.id + ',\'approve\')">Approve → run + PR</button>'
+                : '<span class="sub">command not in this repo’s allowlist — add it in config to enable one-click run</span>')
+            : '')
         + (ru && i.repo ? '<button class="btn subtle" onclick="act(' + i.id + ',\'issue\')">Open issue instead</button>' : '')
         + (i.repo ? '<button class="btn subtle" onclick="act(' + i.id + ',\'reinvestigate\')" title="requeues for a fresh investigation — costs one budget unit">Re-investigate</button>' : '')
         + '<button class="btn subtle" onclick="act(' + i.id + ',\'dismiss\')">Dismiss</button>'
@@ -236,9 +241,13 @@
     if (ev && i.patch) {
       ev = ev.replace(/```diff\n[\s\S]*?```/, '↓ proposed fix shown below')
       fixBlock = '<pre class="fix">' + diffHtml(i.patch) + '</pre>'
+    } else if (ev && i.command) {
+      ev = ev.replace(/```(?:sh|bash|shell)\n[\s\S]*?```/, '↓ proposed command shown below')
+      fixBlock = '<pre class="fix cmd">$ ' + esc(i.command) + '</pre>'
     }
+    const hasFix = i.patch || i.command
     const body = ev
-      ? '<details' + (i.patch ? ' open' : '') + '><summary>Evidence' + (i.patch ? ' + proposed fix' : '') + '</summary><pre>' + esc(ev) + '</pre>' + fixBlock + '</details>'
+      ? '<details' + (hasFix ? ' open' : '') + '><summary>Evidence' + (i.patch ? ' + proposed fix' : i.command ? ' + proposed command' : '') + '</summary><pre>' + esc(ev) + '</pre>' + fixBlock + '</details>'
       : (i.detail ? '<details' + (i.sense === 'self' ? ' open' : '') + '><summary>Detail</summary><pre>' + esc(i.detail) + '</pre></details>' : '')
 
     const repoTag = i.repo

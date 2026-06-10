@@ -43,9 +43,12 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
       Tailscale, ntfy topic, `resident install`, lid-closed power settings (runbook in README)
 - [ ] **Sentry / error sense**: poll Sentry API (or generic error-log webhook receiver) — this is
       the killer signal; prod errors at 2am are the founding demo of the whole pitch
-- [ ] **Command-type approvals**: findings whose right fix is a command (lockfile refresh,
+- [x] **Command-type approvals**: findings whose right fix is a command (lockfile refresh,
       `bun update x y`) get an approvable action with a per-repo command allowlist — closes the
-      gap discovered on day one (el-plato investigation correctly refused to hand-diff a lockfile)
+      gap discovered on day one (el-plato investigation correctly refused to hand-diff a lockfile).
+      Investigation may propose a ```sh command instead of a diff; approve runs it **deterministically**
+      (no AI, no shell — arg-array spawn) in a disposable worktree → PR. Allowlist (`repo.commands`)
+      enforced server-side; empty by default (opt in per repo). UI gates the button on it.
 - [x] **Model tiering**: config default `sonnet` for investigations; escalate to the big model
       only for score ≥ 85 or on Re-investigate (legacy `model` still pins everything; model recorded
       per finding + shown in the inbox)
@@ -124,4 +127,9 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   launchd + notifications; public on GitHub (AGPL-3.0); moved to ~/.resident/app after TCC incident
 - 2026-06-10 — Phase 1: model tiering (sonnet base → opus on score ≥85 or Re-investigate; legacy
   `model` still pins) + killed-run cost estimation (wall-clock × per-tier rate). Model shown per
-  finding in the inbox. First live dig under tiering correctly routed a score-60 finding to sonnet.
+  finding in the inbox. First live dig under tiering correctly routed a score-60 finding to sonnet
+  for $0.66 vs ~$2.47 on opus that morning (~73% cheaper).
+- 2026-06-10 — Phase 1: command-type approvals. Investigations can propose a `sh` command fix;
+  Approve runs it deterministically (no AI, no shell) in a disposable worktree → PR, gated by a
+  per-repo command allowlist (`repo.commands`, server-enforced, empty by default). Closes the
+  day-one lockfile gap.

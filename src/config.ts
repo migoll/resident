@@ -12,6 +12,9 @@ export interface RepoCfg {
   checks?: boolean
   /** git pull --ff-only before each scan — for dedicated/server machines watching clones */
   pull?: boolean
+  /** command prefixes a human may one-click run for this repo, e.g. ["bun update", "bun install"].
+   *  Absent/empty = no command-fix may run here (safe default — opt in per repo to earn the capability). */
+  commands?: string[]
 }
 
 export interface Config {
@@ -49,6 +52,23 @@ export function investigationModel(cfg: Config, score: number, escalate = false)
   const escalated = cfg.models?.escalated ?? MODEL_DEFAULTS.escalated
   const threshold = cfg.escalateScore ?? MODEL_DEFAULTS.escalateScore
   return escalate || score >= threshold ? escalated : base
+}
+
+// chaining / redirection / subshell / newline — no place in an allowlisted package command, and a
+// signal the proposal is trying to do more than it claims. (Commands also run shell-less, so these are
+// inert at execution; rejecting them is defence-in-depth + keeps the allowlist honest.)
+const SHELL_META = /[;&|`$<>(){}\n]/
+
+/** True only if `cmd` is a single, metachar-free command whose leading tokens match one of the repo's
+ *  allowed prefixes on a token boundary (so "bun update" allows "bun update zod" but not "bun updatex"). */
+export function commandAllowed(repo: RepoCfg | undefined, cmd: string): boolean {
+  const c = (cmd ?? '').trim()
+  if (!repo || !c || SHELL_META.test(c)) return false
+  const toks = c.split(/\s+/)
+  return (repo.commands ?? []).some((allow) => {
+    const a = allow.trim().split(/\s+/).filter(Boolean)
+    return a.length > 0 && a.length <= toks.length && a.every((t, i) => t === toks[i])
+  })
 }
 
 export function loadConfig(): Config | null {

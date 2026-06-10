@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
-import { saveConfig, type Config } from './config'
+import { saveConfig, commandAllowed, type Config } from './config'
 import type { Store } from './store'
 import type { DaemonState } from './daemon'
-import { approve } from './hands'
+import { approve, applyCommand } from './hands'
 import { notify } from './notify'
 
 export function startServer(deps: {
@@ -68,7 +68,10 @@ export function startServer(deps: {
           intervalMinutes: cfg.intervalMinutes,
           watching: { repos: cfg.repos.map((r) => r.name), urls: cfg.urls },
           repoUrls,
-          items: store.items(150),
+          // tell the UI which proposed commands are runnable (allowlisted) without duplicating the rule client-side
+          items: store.items(150).map((it) =>
+            it.command ? { ...it, commandAllowed: commandAllowed(cfg.repos.find((r) => r.name === it.repo), it.command) } : it,
+          ),
         })
       }
 
@@ -173,23 +176,29 @@ export function startServer(deps: {
           return Response.json({ ok: true })
         }
 
-        // approve → apply patch on a worktree branch + open PR (async; UI polls)
-        if (!item.patch) return Response.json({ ok: false, error: 'no patch to apply' }, { status: 400 })
+        // approve → apply the proposed fix on a worktree branch + open PR (async; UI polls).
+        // A fix is either a diff (AI-applied) or an allowlisted command (deterministic, no AI).
         const repo = cfg.repos.find((r) => r.name === item.repo)
         if (!repo) return Response.json({ ok: false, error: 'unknown repo' }, { status: 400 })
+        const useCommand = !item.patch && !!item.command
+        if (!item.patch && !item.command) return Response.json({ ok: false, error: 'no fix to apply' }, { status: 400 })
+        if (useCommand && !commandAllowed(repo, item.command!))
+          return Response.json({ ok: false, error: `command not in ${repo.name}'s allowlist: ${item.command}` }, { status: 400 })
         store.update(item.id, { status: 'approving' })
         ;(async () => {
-          log(`⚒ approving #${item.id}: ${item.title}`)
-          const res = await approve(item, repo.path, cfg.model)
+          log(`⚒ approving #${item.id}: ${item.title}${useCommand ? ` · $ ${item.command}` : ''}`)
+          const res = useCommand ? await applyCommand(item, repo.path) : await approve(item, repo.path, cfg.model)
           store.addCost(res.cost)
           if (res.ok) {
             store.update(item.id, { status: 'approved', pr_url: res.pr_url, cost: item.cost + res.cost })
             log(`  → ${res.pr_url}`)
             notify(cfg, 'Resident: PR opened', `${item.title}\n${res.pr_url}`)
           } else {
-            store.update(item.id, { status: 'failed', reason: 'apply/PR failed — see runs log' })
-            log(`  → approve failed`)
-            notify(cfg, 'Resident: approve failed', item.title)
+            const noChanges = (res as any).noChanges
+            // a command that changed nothing isn't a failure — surface it as ready with the explanation
+            store.update(item.id, { status: noChanges ? 'ready' : 'failed', reason: noChanges ? 'command ran but produced no changes' : 'apply/PR failed — see runs log' })
+            log(`  → ${noChanges ? 'command: no changes' : 'approve failed'}`)
+            if (!noChanges) notify(cfg, 'Resident: approve failed', item.title)
           }
         })()
         return Response.json({ ok: true })

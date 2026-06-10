@@ -56,6 +56,38 @@ function extractDiff(text: string): string | null {
   return m ? m[1].trimEnd() : null
 }
 
+function extractCommand(text: string): string | null {
+  const m = text.match(/```(?:sh|bash|shell)\n([\s\S]*?)```/)
+  if (!m) return null
+  // first real command line, stripping a leading "$ " prompt and comment/blank lines
+  const first = m[1].split('\n').map((s) => s.replace(/^\$\s*/, '').trim()).find((s) => s && !s.startsWith('#'))
+  return first || null
+}
+
+/** Minimal shell-less command runner for the deterministic command-fix path. */
+async function sh(args: string[], cwd: string, timeoutMs = 60_000): Promise<{ ok: boolean; out: string }> {
+  try {
+    const p = Bun.spawn(args, { cwd, stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs, killSignal: 'SIGKILL', env: { ...process.env } })
+    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()])
+    const code = await p.exited
+    return { ok: code === 0, out: (out + (err ? '\n' + err : '')).trim() }
+  } catch (e) {
+    return { ok: false, out: String(e) }
+  }
+}
+
+/** Best-effort default base ref for a new branch: origin's default → origin/main|master → current local branch. */
+async function defaultBase(repoPath: string, hasRemote: boolean): Promise<string> {
+  if (hasRemote) {
+    const h = await sh(['git', 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], repoPath)
+    if (h.ok && h.out) return h.out
+    for (const b of ['origin/main', 'origin/master'])
+      if ((await sh(['git', 'rev-parse', '--verify', '--quiet', b], repoPath)).ok) return b
+  }
+  const cur = await sh(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], repoPath)
+  return cur.ok && cur.out && cur.out !== 'HEAD' ? cur.out : 'HEAD'
+}
+
 function saveTranscript(id: number, kind: string, text: string) {
   try {
     const dir = join(HOME, 'runs')
@@ -88,7 +120,11 @@ Investigate the real situation in this codebase (read files, git history, gh, et
 Bullet list of file:line references, each with a one-line explanation.
 
 ## PROPOSED FIX
-ONE minimal, surgical unified diff inside a \`\`\`diff fenced block. Use correct relative paths. If no code fix is appropriate (e.g. it's informational or needs a human decision), write NONE and one sentence why.
+Choose exactly ONE:
+- A minimal, surgical unified diff inside a \`\`\`diff fenced block (correct relative paths) — for ordinary code edits. This is the default.
+- A single shell command inside a \`\`\`sh fenced block — ONLY when a hand-written diff is the wrong tool (refreshing a lockfile, bumping a dependency, regenerating a generated file). One command, no shell chaining (no &&, ;, |, redirects), e.g. \`bun update foo bar\`.
+- NONE, with one sentence why, if it's informational or needs a human decision.
+Prefer the diff for anything you can hand-edit correctly; reach for a command only when editing the file by hand would be wrong.
 
 ## RISK
 One line: low/medium/high and why.
@@ -97,7 +133,9 @@ Be concrete and honest. If the finding is stale or a false positive, say so unde
 
   const res = await runClaude(prompt, repoPath, READONLY_TOOLS, model)
   saveTranscript(item.id, 'investigate', res.text)
-  return { ok: res.ok, evidence: res.text, patch: extractDiff(res.text), cost: res.cost, costEstimated: res.costEstimated }
+  const patch = extractDiff(res.text)
+  // a command-fix is only honoured when no diff was proposed (diffs are the constrained default)
+  return { ok: res.ok, evidence: res.text, patch, command: patch ? null : extractCommand(res.text), cost: res.cost, costEstimated: res.costEstimated }
 }
 
 /** Human clicked Approve: apply the proposed fix on a branch and open a PR.
@@ -136,4 +174,61 @@ HARD RULES — the user's working checkout must never be disturbed:
   const url = last.match(/https?:\/\/\S+/)?.[0] ?? res.text.match(/https:\/\/github\.com\/\S+\/pull\/\d+/)?.[0] ?? null
   const local = last.startsWith('LOCAL:') ? last : null
   return { ok: res.ok && !!(url || local), pr_url: url ?? local, cost: res.cost, text: res.text }
+}
+
+/** Human approved a COMMAND fix (e.g. `bun update foo`): run the already-allowlisted command in a
+ *  disposable worktree, commit whatever it changed, open a PR. Fully deterministic — no AI, no cost,
+ *  no shell (arg-array spawn). The caller MUST have validated item.command against the repo allowlist. */
+export async function applyCommand(item: Item, repoPath: string) {
+  const branch = branchFor(item)
+  const worktree = `/tmp/resident-wt-${item.id}`
+  const tokens = (item.command ?? '').trim().split(/\s+/).filter(Boolean)
+  const steps: string[] = []
+  const done = (ok: boolean, pr_url: string | null, extra: Record<string, unknown> = {}) => {
+    saveTranscript(item.id, 'command', steps.join('\n\n'))
+    return { ok, pr_url, cost: 0, text: steps.join('\n\n'), ...extra }
+  }
+  if (!tokens.length) return done(false, null)
+
+  const hasRemote = (await sh(['git', 'remote', 'get-url', 'origin'], repoPath)).ok
+  if (hasRemote) await sh(['git', 'fetch', 'origin', '--quiet'], repoPath, 120_000)
+  const base = await defaultBase(repoPath, hasRemote)
+
+  // fresh, retry-safe worktree (clear any stale one from an interrupted run first)
+  await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
+  const add = await sh(['git', 'worktree', 'add', worktree, '-B', branch, base], repoPath)
+  steps.push(`worktree add -B ${branch} ${base}\n${add.out}`)
+  if (!add.ok) return done(false, null)
+
+  // run the approved command IN the worktree, never the user's checkout
+  const ran = await sh(tokens, worktree, 180_000)
+  steps.push(`$ ${tokens.join(' ')}\n${ran.out}`)
+
+  await sh(['git', 'add', '-A'], worktree)
+  const noChanges = (await sh(['git', 'diff', '--cached', '--quiet'], worktree)).ok // exit 0 = nothing staged
+  if (noChanges || !ran.ok) {
+    await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
+    steps.push(noChanges ? '→ command produced no changes — nothing to PR' : '→ command exited non-zero')
+    return done(false, null, { noChanges })
+  }
+
+  const msg = `${(item.title || 'fix').replace(/"/g, "'")} (via Resident)`
+  const commit = await sh(['git', 'commit', '-m', msg], worktree)
+  steps.push(commit.out)
+
+  let prUrl: string | null = null
+  if (hasRemote && commit.ok) {
+    const push = await sh(['git', 'push', '-u', 'origin', branch, '--quiet'], worktree, 120_000)
+    steps.push(push.out)
+    if (push.ok) {
+      const body = `Proposed by Resident, human-approved.\n\nFix run: \`${tokens.join(' ')}\`\n\n${(item.evidence ?? '').slice(0, 3000)}`
+      const pr = await sh(['gh', 'pr', 'create', '--title', msg, '--body', body, '--head', branch], worktree, 120_000)
+      steps.push(pr.out)
+      prUrl = pr.out.match(/https?:\/\/\S+/)?.[0] ?? null
+    }
+  }
+
+  await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
+  const local = !hasRemote && commit.ok ? `LOCAL: ${branch}` : null
+  return done(commit.ok && !!(prUrl || local), prUrl ?? local)
 }
