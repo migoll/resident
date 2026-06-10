@@ -41,8 +41,12 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
 
 - [ ] **Deploy the residence**: 2018 MBP at home — clones w/ `pull:true`, `bind 0.0.0.0`,
       Tailscale, ntfy topic, `resident install`, lid-closed power settings (runbook in README)
-- [ ] **Sentry / error sense**: poll Sentry API (or generic error-log webhook receiver) — this is
-      the killer signal; prod errors at 2am are the founding demo of the whole pitch
+- [x] **Sentry / error sense**: poll Sentry API (or generic error-log webhook receiver) — this is
+      the killer signal; prod errors at 2am are the founding demo of the whole pitch.
+      Polls org-level unresolved issues (24h window) each cycle; new/regressed errors investigate,
+      old ongoing noise stays visible-but-ignored; project slug ↔ repo name maps the dig to the
+      codebase; rejected token raises a loud blindness finding. Webhooks deferred until the relay
+      exists (needs a reachable endpoint).
 - [x] **Command-type approvals**: findings whose right fix is a command (lockfile refresh,
       `bun update x y`) get an approvable action with a per-repo command allowlist — closes the
       gap discovered on day one (el-plato investigation correctly refused to hand-diff a lockfile).
@@ -118,7 +122,8 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
 ## Open questions (decide deliberately, not by drift)
 
 - Pricing shape for the hosted tier; CLA timing before first external PR
-- Sentry: poll API vs receive webhooks (webhook receiver needs reachable endpoint → relay first?)
+- ~~Sentry: poll API vs receive webhooks~~ → decided 06-10: poll now (free tier, 15-min cycles are
+  fine for v1); webhooks when the relay gives us a reachable endpoint
 - How much of triage moves from heuristics to a cheap model (cost vs taste)
 - Rename risk: "Resident" collision check before launch
 
@@ -143,6 +148,10 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   "no changes"; applyCommand retries are idempotent (worktree prune + force-with-lease + existing-PR
   URL recovery); extractCommand refuses multi-command blocks; SHELL_META also rejects \r, quotes,
   backslash; reinvestigate clears stale command proposals.
+- 2026-06-10 — Sentry error sense (Phase 1's killer signal): org-level poll, judgment scoring
+  (new fatal 92 / new error 82 / regressed 78 / warnings + old noise below threshold), project↔repo
+  mapping for codebase digs, blind-on-rejected-token. Verified live against the chrlnd org incl.
+  the blindness path. Token in config only, never in the repo or transcripts.
 - 2026-06-10 — "do better" pass: one shared proc.run() helper (kills 3 duplicated spawn wrappers;
   `stdout` kept separate from combined output so gh/git stderr warnings can't corrupt JSON parses);
   reconcile/refreshOutcomes async — gh calls no longer freeze the inbox server mid-cycle;

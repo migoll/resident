@@ -17,9 +17,19 @@ export interface RepoCfg {
   commands?: string[]
 }
 
+export interface SentryCfg {
+  org: string
+  /** Personal Token (scopes: event:read, project:read, org:read) — lives only in ~/.resident/config.json */
+  token: string
+  /** API base; new orgs may live on a regional host (e.g. https://de.sentry.io) */
+  url?: string
+}
+
 export interface Config {
   intervalMinutes: number
   budgets: { perCycle: number; perDay: number }
+  /** error monitoring — the 2am-prod-error signal */
+  sentry?: SentryCfg
   /** @deprecated legacy pin: if set, forces EVERY investigation onto this model (disables tiering). Prefer `models`. */
   model?: string
   /** model tiering for investigations: a cheap base model for routine digs, a stronger one for the hard cases */

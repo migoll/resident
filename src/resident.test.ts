@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import { commandAllowed, investigationModel, applyModel, type Config, type RepoCfg } from './config'
 import { estimateCost, extractCommand, branchFor } from './hands'
+import { scoreSentryIssue } from './senses'
 import { openStore, INVESTIGATE_THRESHOLD } from './store'
 
 const CFG: Config = { intervalMinutes: 15, budgets: { perCycle: 2, perDay: 10 }, urls: [], repos: [] }
@@ -118,6 +119,32 @@ describe('extractCommand', () => {
   })
   test('no sh block → null (diff blocks are not commands)', () => {
     expect(extractCommand('```diff\n-a\n+b\n```')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------- sentry judgment
+describe('scoreSentryIssue', () => {
+  const NOW = 1_750_000_000_000
+  const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString()
+  test('new errors burn hot, fatal hotter', () => {
+    expect(scoreSentryIssue({ id: '1', level: 'error', firstSeen: hoursAgo(3) }, NOW)).toBe(82)
+    expect(scoreSentryIssue({ id: '1', level: 'fatal', firstSeen: hoursAgo(3) }, NOW)).toBe(92)
+  })
+  test('unhandled bumps the score', () => {
+    expect(scoreSentryIssue({ id: '1', level: 'fatal', firstSeen: hoursAgo(3), isUnhandled: true }, NOW)).toBe(96)
+  })
+  test('substatus "new" counts as new even with an older firstSeen', () => {
+    expect(scoreSentryIssue({ id: '1', level: 'error', substatus: 'new', firstSeen: hoursAgo(100) }, NOW)).toBe(82)
+  })
+  test('regressions and escalations matter', () => {
+    expect(scoreSentryIssue({ id: '1', level: 'error', substatus: 'regressed', firstSeen: hoursAgo(500) }, NOW)).toBe(78)
+    expect(scoreSentryIssue({ id: '1', level: 'error', substatus: 'escalating', firstSeen: hoursAgo(500) }, NOW)).toBe(78)
+  })
+  test('old ongoing noise stays below the investigate threshold (visible, not alarming)', () => {
+    expect(scoreSentryIssue({ id: '1', level: 'error', substatus: 'ongoing', firstSeen: hoursAgo(500) }, NOW)).toBeLessThan(INVESTIGATE_THRESHOLD)
+  })
+  test('new warnings stay below the threshold too', () => {
+    expect(scoreSentryIssue({ id: '1', level: 'warning', firstSeen: hoursAgo(3) }, NOW)).toBeLessThan(INVESTIGATE_THRESHOLD)
   })
 })
 

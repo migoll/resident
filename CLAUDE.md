@@ -28,7 +28,7 @@ bun build src/cli.ts --target=bun --outfile=/dev/null   # parse check
 - `cli.ts` — commands: init/once/start/install/uninstall/stop/status/open
 - `config.ts` — `~/.resident/config.json`: repos (path/name/checks/pull), urls, budgets,
   intervalMinutes, model, bind, notify
-- `senses.ts` — polling watchers: git/deps/typecheck/uptime/github → scored `Finding`s
+- `senses.ts` — polling watchers: git/deps/typecheck/uptime/github/sentry → scored `Finding`s
 - `store.ts` — SQLite items table; statuses: queued→investigating→ready→(approving→approved→
   merged|closed)|(working→tracked)|failed|ignored|dismissed; INVESTIGATE_THRESHOLD = 55
 - `daemon.ts` — cycle loop: refreshOutcomes → blindnessCheck → senses → triage → budgeted

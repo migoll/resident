@@ -125,6 +125,90 @@ async function uptimeSense(urls: string[]): Promise<Finding[]> {
 }
 const host = (u: string) => { try { return new URL(u).host } catch { return u } }
 
+// ---------------------------------------------------------------- sentry
+export interface SentryIssue {
+  id: string
+  title?: string
+  culprit?: string
+  permalink?: string
+  shortId?: string
+  level?: string
+  count?: string
+  userCount?: number
+  firstSeen?: string
+  lastSeen?: string
+  substatus?: string
+  isUnhandled?: boolean
+  project?: { slug?: string; name?: string }
+  metadata?: { type?: string; value?: string; filename?: string }
+}
+
+/** Judgment for one Sentry issue (pure; exported for tests). New errors burn hot, regressions
+ *  matter, old ongoing noise stays visible but below the investigate threshold — Dependabot
+ *  fatigue is the named enemy, and an error that's been firing for weeks is not news. */
+export function scoreSentryIssue(is: SentryIssue, now = Date.now()): number {
+  const first = is.firstSeen ? new Date(is.firstSeen).getTime() : 0
+  const isNew = is.substatus === 'new' || (first > 0 && now - first < 2 * DAY)
+  const regressed = is.substatus === 'regressed' || is.substatus === 'escalating'
+  let score = isNew
+    ? is.level === 'fatal' ? 92 : is.level === 'warning' ? 52 : 82
+    : regressed ? 78
+    : 50 // ongoing — shows up as "ignored, with reason", not as a fresh alarm
+  if (is.isUnhandled) score += 4
+  return Math.min(score, 99)
+}
+
+/** Poll Sentry for unresolved issues active in the last 24h (org-level, all projects).
+ *  Exported so it can be exercised standalone. */
+export async function sentrySense(cfg: Config): Promise<Finding[]> {
+  const s = cfg.sentry
+  if (!s?.org || !s?.token) return []
+  const base = (s.url ?? 'https://sentry.io').replace(/\/$/, '')
+  let res: Response
+  try {
+    res = await fetch(`${base}/api/0/organizations/${s.org}/issues/?query=is%3Aunresolved&statsPeriod=24h&sort=date&limit=25&project=-1`, {
+      headers: { authorization: `Bearer ${s.token}` },
+      signal: AbortSignal.timeout(15_000),
+    })
+  } catch {
+    return [] // transient network failure — skip this cycle, next one retries
+  }
+  // a rejected token is BLINDNESS, not quiet — surface it loudly (quiet and blind must never look the same)
+  if (res.status === 401 || res.status === 403) {
+    return [{
+      sense: 'sentry', repo: '', kind: 'blind',
+      title: 'Sentry sense is blind — the API token was rejected',
+      detail: `GET ${base}/api/0/organizations/${s.org}/issues/ → HTTP ${res.status}.\n\nThe Personal Token is missing, revoked, or under-scoped. Re-create one (scopes: event:read, project:read, org:read) and update the "sentry" key in ~/.resident/config.json.`,
+      score: 70, hash: h('sentry|auth'),
+    }]
+  }
+  if (!res.ok) return []
+  let issues: SentryIssue[]
+  try { issues = await res.json() } catch { return [] }
+  if (!Array.isArray(issues)) return []
+
+  return issues.map((is): Finding => {
+    const slug = is.project?.slug ?? ''
+    // project slug ←→ watched repo name: when they match, the investigation gets the codebase
+    const repo = cfg.repos.find((r) => r.name.toLowerCase() === slug.toLowerCase())?.name ?? ''
+    const meta = is.metadata ?? {}
+    return {
+      sense: 'sentry', repo, kind: is.level || 'error',
+      title: `[${slug || s.org}] ${is.title ?? meta.type ?? 'error'}`.slice(0, 140),
+      detail: [
+        `${is.shortId ?? is.id} · level=${is.level ?? '?'} · ${is.count ?? '?'} event(s) / ${is.userCount ?? 0} user(s)${is.isUnhandled ? ' · UNHANDLED' : ''}`,
+        `first seen ${is.firstSeen ?? '?'} · last seen ${is.lastSeen ?? '?'}${is.substatus ? ` · ${is.substatus}` : ''}`,
+        is.culprit ? `culprit: ${is.culprit}` : '',
+        meta.filename ? `file: ${meta.filename}` : '',
+        meta.type || meta.value ? `${meta.type ?? 'error'}: ${(meta.value ?? '').slice(0, 300)}` : '',
+        is.permalink ?? '',
+      ].filter(Boolean).join('\n'),
+      score: scoreSentryIssue(is),
+      hash: h(`sentry|${s.org}|${is.id}`),
+    }
+  })
+}
+
 // ---------------------------------------------------------------- github
 let ghOk: boolean | null = null
 async function githubSense(repo: RepoCfg): Promise<Finding[]> {
@@ -172,6 +256,10 @@ export async function runSenses(cfg: Config, log: (s: string) => void = () => {}
     return found
   })
   const uptime = uptimeSense(cfg.urls)
-  const all = (await Promise.all([...perRepo, uptime])).flat()
+  const sentry = sentrySense(cfg).then((f) => {
+    if (cfg.sentry) log(`  sentry (${cfg.sentry.org}) → ${f.length} finding(s)`)
+    return f
+  })
+  const all = (await Promise.all([...perRepo, uptime, sentry])).flat()
   return all
 }

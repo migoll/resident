@@ -36,6 +36,8 @@ resident install # or: run permanently via launchd — starts at login, restarts
 
 Config lives in `~/.resident/config.json`: repos, watched URLs, cycle interval, budgets, and optional `"notify"` — point it at an [ntfy](https://ntfy.sh) topic URL or a Slack incoming webhook and Resident pings your phone when something's ready for you, when a PR opens, or when a site goes down. State in `~/.resident/resident.db`, investigation transcripts in `~/.resident/runs/`. The watchlist is also editable from the inbox itself (the chips row).
 
+Got [Sentry](https://sentry.io)? Add `"sentry": { "org": "your-org", "token": "sntryu_..." }` (a Personal Token with `event:read` + `project:read` + `org:read` — the free tier is enough) and Resident polls for fresh production errors every cycle: new and regressed issues get investigated like any other finding, and if a Sentry project slug matches a watched repo's name, the investigation digs through that codebase. Old, ongoing errors are deliberately kept below the investigation threshold — visible in the activity feed, never an alarm.
+
 Model spend is tiered by default: routine investigations run on a cheap base model (`sonnet`) and only escalate to the strong one (`opus`) when a finding scores ≥ 85 or you click *Re-investigate* — tune via `"models": { "base": ..., "escalated": ... }` and `"escalateScore"`, or pin everything with the legacy `"model"` override. Findings whose right fix is a *command* (a lockfile refresh, `bun update x`) become one-click approvals only if you allowlist the command prefix per repo: `"repos": [{ ..., "commands": ["bun update", "bun install"] }]` — empty by default, enforced server-side, and the command runs with no shell in a disposable worktree.
 
 ## Run it on a spare machine
