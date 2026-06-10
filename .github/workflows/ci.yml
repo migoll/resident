@@ -1,0 +1,17 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Unit tests
+        run: bun test
+      - name: Parse check (the repo's only build gate)
+        run: bun build src/cli.ts --target=bun --outfile=/dev/null

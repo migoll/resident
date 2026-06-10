@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { run } from './proc'
 import type { Config, RepoCfg } from './config'
 
 export interface Finding {
@@ -13,17 +14,6 @@ export interface Finding {
 }
 
 const h = (s: string) => 'f' + Bun.hash(s).toString(36)
-
-async function run(cmd: string[], cwd?: string, timeout = 30_000): Promise<{ ok: boolean; out: string }> {
-  try {
-    const p = Bun.spawn(cmd, { cwd, stdout: 'pipe', stderr: 'pipe', timeout, killSignal: 'SIGKILL' })
-    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()])
-    const code = await p.exited
-    return { ok: code === 0, out: (out + (err ? '\n' + err : '')).trim() }
-  } catch (e) {
-    return { ok: false, out: String(e) }
-  }
-}
 
 const DAY = 86_400_000
 
@@ -147,7 +137,7 @@ async function githubSense(repo: RepoCfg): Promise<Finding[]> {
   const prs = await run(['gh', 'pr', 'list', '--json', 'number,title,mergeable,reviewDecision,statusCheckRollup', '--limit', '15'], repo.path, 30_000)
   if (prs.ok) {
     try {
-      for (const pr of JSON.parse(prs.out)) {
+      for (const pr of JSON.parse(prs.stdout)) {
         const rollup = JSON.stringify(pr.statusCheckRollup ?? [])
         if (rollup.includes('"FAILURE"') || rollup.includes('"ERROR"'))
           out.push({ sense: 'github', repo: repo.name, kind: 'pr-failing', title: `PR #${pr.number} has failing checks — “${pr.title}”`, detail: `gh pr view ${pr.number}`, score: 65, hash: h(`gh|${repo.name}|prfail|${pr.number}`) })
@@ -162,7 +152,7 @@ async function githubSense(repo: RepoCfg): Promise<Finding[]> {
   const issues = await run(['gh', 'issue', 'list', '--json', 'number,title,createdAt', '--limit', '10'], repo.path, 30_000)
   if (issues.ok) {
     try {
-      for (const is of JSON.parse(issues.out)) {
+      for (const is of JSON.parse(issues.stdout)) {
         if (Date.now() - new Date(is.createdAt).getTime() < 2 * DAY)
           out.push({ sense: 'github', repo: repo.name, kind: 'new-issue', title: `New issue #${is.number}: “${is.title}”`, detail: `gh issue view ${is.number}`, score: 50, hash: h(`gh|${repo.name}|issue|${is.number}`) })
       }

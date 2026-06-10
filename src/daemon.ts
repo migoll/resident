@@ -1,5 +1,6 @@
 import { readdirSync } from 'node:fs'
 import { investigationModel, type Config } from './config'
+import { run } from './proc'
 import { runSenses } from './senses'
 import { investigate, branchFor } from './hands'
 import { notify } from './notify'
@@ -14,8 +15,9 @@ export interface DaemonState {
 }
 
 /** Heal state orphaned by restarts. No run survives a daemon death — anything
- *  mid-flight either finished out in the world (check GitHub) or must be requeued. */
-export function reconcile(cfg: Config, store: Store, log: (s: string) => void) {
+ *  mid-flight either finished out in the world (check GitHub) or must be requeued.
+ *  Async on purpose: spawnSync here would freeze the inbox server it shares a process with. */
+export async function reconcile(cfg: Config, store: Store, log: (s: string) => void) {
   for (const it of store.items(500)) {
     if (it.status === 'investigating') {
       store.update(it.id, { status: 'queued', reason: 'interrupted by restart — requeued' })
@@ -25,8 +27,8 @@ export function reconcile(cfg: Config, store: Store, log: (s: string) => void) {
       let url: string | null = null
       if (repo) {
         try {
-          const r = Bun.spawnSync(['gh', 'pr', 'list', '--head', branchFor(it), '--state', 'all', '--json', 'url'], { cwd: repo.path, stdout: 'pipe', stderr: 'pipe' })
-          url = JSON.parse(r.stdout.toString())[0]?.url ?? null
+          const r = await run(['gh', 'pr', 'list', '--head', branchFor(it), '--state', 'all', '--json', 'url'], repo.path)
+          url = JSON.parse(r.stdout)[0]?.url ?? null
         } catch {}
       }
       if (url) {
@@ -41,19 +43,21 @@ export function reconcile(cfg: Config, store: Store, log: (s: string) => void) {
 }
 
 /** Track outcomes after our part is done: PRs get merged/closed by humans,
- *  issues get closed — the inbox should reflect reality without being told. */
-export function refreshOutcomes(store: Store, log: (s: string) => void) {
+ *  issues get closed — the inbox should reflect reality without being told.
+ *  Async on purpose: spawnSync here would freeze the inbox server it shares a process with. */
+export async function refreshOutcomes(store: Store, log: (s: string) => void) {
   for (const it of store.items(300)) {
     if (!it.pr_url?.startsWith('https://github.com')) continue
     try {
       if (it.status === 'approved') {
-        const r = Bun.spawnSync(['gh', 'pr', 'view', it.pr_url, '--json', 'state'], { stdout: 'pipe', stderr: 'pipe' })
-        const st = JSON.parse(r.stdout.toString()).state
+        const r = await run(['gh', 'pr', 'view', it.pr_url, '--json', 'state'])
+        if (!r.ok) continue
+        const st = JSON.parse(r.stdout).state
         if (st === 'MERGED') { store.update(it.id, { status: 'merged', reason: 'PR merged' }); log(`  ✓ merged: ${it.title}`) }
         else if (st === 'CLOSED') store.update(it.id, { status: 'closed', reason: 'PR closed without merging' })
       } else if (it.status === 'tracked') {
-        const r = Bun.spawnSync(['gh', 'issue', 'view', it.pr_url, '--json', 'state'], { stdout: 'pipe', stderr: 'pipe' })
-        if (JSON.parse(r.stdout.toString()).state === 'CLOSED') store.update(it.id, { status: 'closed', reason: 'issue closed' })
+        const r = await run(['gh', 'issue', 'view', it.pr_url, '--json', 'state'])
+        if (r.ok && JSON.parse(r.stdout).state === 'CLOSED') store.update(it.id, { status: 'closed', reason: 'issue closed' })
       }
     } catch {}
   }
@@ -90,7 +94,7 @@ export async function cycle(
   const t0 = Date.now()
   log(`◉ cycle started — ${cfg.repos.length} repos, ${cfg.urls.length} url(s)`)
 
-  refreshOutcomes(store, log)
+  await refreshOutcomes(store, log)
   blindnessCheck(cfg, store)
 
   const findings = await runSenses(cfg, log)
@@ -158,7 +162,7 @@ export async function cycle(
 /** The forever loop. */
 export async function startLoop(cfg: Config, store: Store, state: DaemonState, log: (s: string) => void) {
   const interval = Math.max(2, cfg.intervalMinutes) * 60_000
-  reconcile(cfg, store, log)
+  await reconcile(cfg, store, log)
   while (true) {
     state.cycling = true
     try {

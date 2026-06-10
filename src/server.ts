@@ -197,8 +197,9 @@ export function startServer(deps: {
             notify(cfg, 'Resident: PR opened', `${item.title}\n${res.pr_url}`)
           } else {
             const noChanges = (res as any).noChanges
-            // a command that changed nothing isn't a failure — surface it as ready with the explanation
-            store.update(item.id, { status: noChanges ? 'ready' : 'failed', reason: noChanges ? 'command ran but produced no changes' : 'apply/PR failed — see runs log' })
+            // a command that changed nothing isn't a failure — surface it as ready with the explanation.
+            // cost lands on the item either way (a failed AI approve still spent real money)
+            store.update(item.id, { status: noChanges ? 'ready' : 'failed', cost: item.cost + res.cost, reason: noChanges ? 'command ran but produced no changes' : 'apply/PR failed — see runs log' })
             log(`  → ${noChanges ? 'command: no changes' : 'approve failed'}`)
             if (!noChanges) notify(cfg, 'Resident: approve failed', item.title)
           }

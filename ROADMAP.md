@@ -58,6 +58,9 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
       itself still fall to reconcile() — only intra-lifetime timeouts/crashes are estimated.
 - [ ] **Smoke tests + CI**: senses/triage/store/watch-API covered; GitHub Actions on the repo;
       Resident watches its own CI (dogfood loop closes)
+      *(progress 06-10: `bun test` suite checked in — judgment logic (tiering/allowlist/extraction/
+      cost-estimate) + store CRUD on `:memory:`; Actions workflow added. Remaining: senses/triage/
+      watch-API coverage + the dogfood loop.)*
 - [ ] **Hygiene**: log rotation, archive items older than N days, `resident doctor`
       (checks bun/claude/gh/tailscale auth and folder access)
 
@@ -140,3 +143,9 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   "no changes"; applyCommand retries are idempotent (worktree prune + force-with-lease + existing-PR
   URL recovery); extractCommand refuses multi-command blocks; SHELL_META also rejects \r, quotes,
   backslash; reinvestigate clears stale command proposals.
+- 2026-06-10 — "do better" pass: one shared proc.run() helper (kills 3 duplicated spawn wrappers;
+  `stdout` kept separate from combined output so gh/git stderr warnings can't corrupt JSON parses);
+  reconcile/refreshOutcomes async — gh calls no longer freeze the inbox server mid-cycle;
+  estimateCost knows fable ($1.50/min) and unknown models now fall back to the TOP rate;
+  failed approves record their cost on the item; 29-test `bun test` suite checked in + GitHub
+  Actions CI; README documents tiering + command allowlists.

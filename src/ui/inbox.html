@@ -217,7 +217,7 @@
         + (i.patch ? '<button class="btn primary" onclick="act(' + i.id + ',\'approve\')">Approve → branch + PR</button>'
             : i.command ? (i.commandAllowed
                 ? '<button class="btn primary" onclick="act(' + i.id + ',\'approve\')">Approve → run + PR</button>'
-                : '<span class="sub">command not in this repo’s allowlist — add it in config to enable one-click run</span>')
+                : '<span class="sub">command not in this repo’s allowlist — add it to repos[].commands in ~/.resident/config.json to enable one-click run</span>')
             : '')
         + (ru && i.repo ? '<button class="btn subtle" onclick="act(' + i.id + ',\'issue\')">Open issue instead</button>' : '')
         + (i.repo ? '<button class="btn subtle" onclick="act(' + i.id + ',\'reinvestigate\')" title="requeues for a fresh investigation — costs one budget unit">Re-investigate</button>' : '')

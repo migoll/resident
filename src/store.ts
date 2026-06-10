@@ -44,9 +44,10 @@ export interface Item {
 
 export const INVESTIGATE_THRESHOLD = 55
 
-export function openStore() {
-  mkdirSync(HOME, { recursive: true })
-  const db = new Database(join(HOME, 'resident.db'))
+/** Open the item store. `dbPath` exists for tests (`:memory:`); production always uses the default. */
+export function openStore(dbPath?: string) {
+  if (!dbPath) mkdirSync(HOME, { recursive: true })
+  const db = new Database(dbPath ?? join(HOME, 'resident.db'))
   db.run(`CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created INTEGER NOT NULL,

@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { HOME } from './config'
+import { run } from './proc'
 import type { Item } from './store'
 
 /** Read-only toolset for shadow-mode investigations. */
@@ -23,11 +24,12 @@ interface ClaudeResult { ok: boolean; text: string; cost: number; costEstimated?
 
 /** Rough $/min by tier — used ONLY when a run dies before emitting its final-cost JSON (timeout/kill/crash),
  *  so spent-but-unrecorded runs don't read as free in the budget ledger. Ratios track published per-token
- *  pricing (opus:sonnet:haiku ≈ 5:3:1); the absolute rate is a deliberately conservative wall-clock heuristic,
- *  and unknown models fall back to the opus rate so the ledger errs toward over-counting, never under. */
-function estimateCost(model: string | undefined, ms: number): number {
-  const m = (model ?? 'opus').toLowerCase()
-  const perMin = m.includes('haiku') ? 0.15 : m.includes('sonnet') ? 0.45 : 0.75
+ *  pricing (fable:opus:sonnet:haiku ≈ 10:5:3:1); the absolute rate is a deliberately conservative wall-clock
+ *  heuristic, and unknown models fall back to the fable rate so the ledger errs toward over-counting, never
+ *  under. Exported for tests. */
+export function estimateCost(model: string | undefined, ms: number): number {
+  const m = (model ?? '').toLowerCase()
+  const perMin = m.includes('haiku') ? 0.15 : m.includes('sonnet') ? 0.45 : m.includes('opus') ? 0.75 : 1.5
   return +((perMin * Math.max(0, ms)) / 60_000).toFixed(2)
 }
 
@@ -35,19 +37,13 @@ async function runClaude(prompt: string, cwd: string, tools: string[], model?: s
   const args = ['claude', '-p', prompt, '--output-format', 'json', '--allowedTools', ...tools, ...extraArgs]
   if (model) args.push('--model', model)
   const t0 = Date.now()
+  const r = await run(args, cwd, timeoutMs)
   try {
-    const p = Bun.spawn(args, { cwd, stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs, killSignal: 'SIGKILL', env: { ...process.env } })
-    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()])
-    const code = await p.exited
-    try {
-      const j = JSON.parse(out)
-      return { ok: code === 0 && !j.is_error, text: j.result ?? out, cost: Number(j.total_cost_usd ?? 0) }
-    } catch {
-      // no final JSON → killed / timed-out / crashed mid-run; estimate spend from wall-clock
-      return { ok: code === 0, text: (out || err).slice(0, 8000), cost: estimateCost(model, Date.now() - t0), costEstimated: true }
-    }
-  } catch (e) {
-    return { ok: false, text: String(e), cost: estimateCost(model, Date.now() - t0), costEstimated: true }
+    const j = JSON.parse(r.stdout)
+    return { ok: r.ok && !j.is_error, text: j.result ?? r.stdout, cost: Number(j.total_cost_usd ?? 0) }
+  } catch {
+    // no final JSON → killed / timed-out / crashed mid-run; estimate spend from wall-clock
+    return { ok: false, text: r.out.slice(0, 8000), cost: estimateCost(model, Date.now() - t0), costEstimated: true }
   }
 }
 
@@ -56,7 +52,8 @@ function extractDiff(text: string): string | null {
   return m ? m[1].trimEnd() : null
 }
 
-function extractCommand(text: string): string | null {
+/** Exported for tests. */
+export function extractCommand(text: string): string | null {
   const m = text.match(/```(?:sh|bash|shell)\n([\s\S]*?)```/)
   if (!m) return null
   // real command lines, stripping "$ " prompts and comment/blank lines
@@ -66,28 +63,16 @@ function extractCommand(text: string): string | null {
   return lines.length === 1 ? lines[0] : null
 }
 
-/** Minimal shell-less command runner for the deterministic command-fix path. */
-async function sh(args: string[], cwd: string, timeoutMs = 60_000): Promise<{ ok: boolean; out: string }> {
-  try {
-    const p = Bun.spawn(args, { cwd, stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs, killSignal: 'SIGKILL', env: { ...process.env } })
-    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()])
-    const code = await p.exited
-    return { ok: code === 0, out: (out + (err ? '\n' + err : '')).trim() }
-  } catch (e) {
-    return { ok: false, out: String(e) }
-  }
-}
-
 /** Best-effort default base ref for a new branch: origin's default → origin/main|master → current local branch. */
 async function defaultBase(repoPath: string, hasRemote: boolean): Promise<string> {
   if (hasRemote) {
-    const h = await sh(['git', 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], repoPath)
-    if (h.ok && h.out) return h.out
+    const h = await run(['git', 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], repoPath)
+    if (h.ok && h.stdout) return h.stdout
     for (const b of ['origin/main', 'origin/master'])
-      if ((await sh(['git', 'rev-parse', '--verify', '--quiet', b], repoPath)).ok) return b
+      if ((await run(['git', 'rev-parse', '--verify', '--quiet', b], repoPath)).ok) return b
   }
-  const cur = await sh(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], repoPath)
-  return cur.ok && cur.out && cur.out !== 'HEAD' ? cur.out : 'HEAD'
+  const cur = await run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], repoPath)
+  return cur.ok && cur.stdout && cur.stdout !== 'HEAD' ? cur.stdout : 'HEAD'
 }
 
 function saveTranscript(id: number, kind: string, text: string) {
@@ -192,63 +177,63 @@ export async function applyCommand(item: Item, repoPath: string) {
   }
   if (!tokens.length) return done(false, null)
 
-  const hasRemote = (await sh(['git', 'remote', 'get-url', 'origin'], repoPath)).ok
-  if (hasRemote) await sh(['git', 'fetch', 'origin', '--quiet'], repoPath, 120_000)
+  const hasRemote = (await run(['git', 'remote', 'get-url', 'origin'], repoPath)).ok
+  if (hasRemote) await run(['git', 'fetch', 'origin', '--quiet'], repoPath, 120_000)
   const base = await defaultBase(repoPath, hasRemote)
 
   // fresh, retry-safe worktree: clear stale registrations AND a stale dir (a crashed run can leave
   // a dir git no longer tracks — `worktree remove` alone won't recover that, `add` would then fail)
-  await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
-  await sh(['git', 'worktree', 'prune'], repoPath)
-  await sh(['rm', '-rf', worktree], repoPath)
-  const add = await sh(['git', 'worktree', 'add', worktree, '-B', branch, base], repoPath)
+  await run(['git', 'worktree', 'remove', worktree, '--force'], repoPath, 60_000)
+  await run(['git', 'worktree', 'prune'], repoPath)
+  await run(['rm', '-rf', worktree], repoPath, 60_000)
+  const add = await run(['git', 'worktree', 'add', worktree, '-B', branch, base], repoPath, 120_000)
   steps.push(`worktree add -B ${branch} ${base}\n${add.out}`)
   if (!add.ok) return done(false, null)
 
   // run the approved command IN the worktree, never the user's checkout (generous timeout: cold installs)
-  const ran = await sh(tokens, worktree, 300_000)
+  const ran = await run(tokens, worktree, 300_000)
   steps.push(`$ ${tokens.join(' ')}\n${ran.out}`)
 
   // a failed command is a failure even if it changed nothing — check this BEFORE no-changes
   if (!ran.ok) {
-    await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
+    await run(['git', 'worktree', 'remove', worktree, '--force'], repoPath, 60_000)
     steps.push('→ command exited non-zero — worktree discarded')
     return done(false, null)
   }
 
-  await sh(['git', 'add', '-A'], worktree)
-  const noChanges = (await sh(['git', 'diff', '--cached', '--quiet'], worktree)).ok // exit 0 = nothing staged
+  await run(['git', 'add', '-A'], worktree)
+  const noChanges = (await run(['git', 'diff', '--cached', '--quiet'], worktree)).ok // exit 0 = nothing staged
   if (noChanges) {
-    await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
+    await run(['git', 'worktree', 'remove', worktree, '--force'], repoPath, 60_000)
     steps.push('→ command succeeded but produced no changes — nothing to PR')
     return done(false, null, { noChanges: true })
   }
 
   const msg = `${(item.title || 'fix').replace(/"/g, "'")} (via Resident)`
-  const commit = await sh(['git', 'commit', '-m', msg], worktree)
+  const commit = await run(['git', 'commit', '-m', msg], worktree)
   steps.push(commit.out)
 
   let prUrl: string | null = null
   if (hasRemote && commit.ok) {
     // force-with-lease: the resident/<id>-* branch is ours by construction, and a RETRY of an
     // interrupted run re-creates it from base — a plain push would be rejected as non-fast-forward
-    const push = await sh(['git', 'push', '-u', 'origin', branch, '--quiet', '--force-with-lease'], worktree, 120_000)
+    const push = await run(['git', 'push', '-u', 'origin', branch, '--quiet', '--force-with-lease'], worktree, 120_000)
     steps.push(push.out)
     if (push.ok) {
       const body = `Proposed by Resident, human-approved.\n\nFix run: \`${tokens.join(' ')}\`\n\n${(item.evidence ?? '').slice(0, 3000)}`
-      const pr = await sh(['gh', 'pr', 'create', '--title', msg, '--body', body, '--head', branch], worktree, 120_000)
+      const pr = await run(['gh', 'pr', 'create', '--title', msg, '--body', body, '--head', branch], worktree, 120_000)
       steps.push(pr.out)
-      prUrl = pr.out.match(/https?:\/\/\S+/)?.[0] ?? null
+      prUrl = pr.stdout.match(/https?:\/\/\S+/)?.[0] ?? null
       if (!prUrl) {
         // pr create fails if a PR already exists for this branch (retry) — recover its URL instead of failing
-        const ls = await sh(['gh', 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'url'], worktree, 60_000)
-        try { prUrl = JSON.parse(ls.out)[0]?.url ?? null } catch {}
+        const ls = await run(['gh', 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'url'], worktree, 60_000)
+        try { prUrl = JSON.parse(ls.stdout)[0]?.url ?? null } catch {}
         if (prUrl) steps.push(`→ PR already existed, recovered: ${prUrl}`)
       }
     }
   }
 
-  await sh(['git', 'worktree', 'remove', worktree, '--force'], repoPath)
+  await run(['git', 'worktree', 'remove', worktree, '--force'], repoPath, 60_000)
   const local = !hasRemote && commit.ok ? `LOCAL: ${branch}` : null
   return done(commit.ok && !!(prUrl || local), prUrl ?? local)
 }

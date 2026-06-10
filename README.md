@@ -34,7 +34,9 @@ resident open    # open the inbox (--app for a chromeless desktop window)
 resident install # or: run permanently via launchd — starts at login, restarts if killed
 ```
 
-Config lives in `~/.resident/config.json`: repos, watched URLs, cycle interval, budgets, optional `"model"` override (e.g. `"sonnet"` for cheaper investigations), and optional `"notify"` — point it at an [ntfy](https://ntfy.sh) topic URL or a Slack incoming webhook and Resident pings your phone when something's ready for you, when a PR opens, or when a site goes down. State in `~/.resident/resident.db`, investigation transcripts in `~/.resident/runs/`. The watchlist is also editable from the inbox itself (the chips row).
+Config lives in `~/.resident/config.json`: repos, watched URLs, cycle interval, budgets, and optional `"notify"` — point it at an [ntfy](https://ntfy.sh) topic URL or a Slack incoming webhook and Resident pings your phone when something's ready for you, when a PR opens, or when a site goes down. State in `~/.resident/resident.db`, investigation transcripts in `~/.resident/runs/`. The watchlist is also editable from the inbox itself (the chips row).
+
+Model spend is tiered by default: routine investigations run on a cheap base model (`sonnet`) and only escalate to the strong one (`opus`) when a finding scores ≥ 85 or you click *Re-investigate* — tune via `"models": { "base": ..., "escalated": ... }` and `"escalateScore"`, or pin everything with the legacy `"model"` override. Findings whose right fix is a *command* (a lockfile refresh, `bun update x`) become one-click approvals only if you allowlist the command prefix per repo: `"repos": [{ ..., "commands": ["bun update", "bun install"] }]` — empty by default, enforced server-side, and the command runs with no shell in a disposable worktree.
 
 ## Run it on a spare machine
 
