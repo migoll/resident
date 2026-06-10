@@ -34,6 +34,10 @@ export interface Item {
   pr_url: string | null
   cost: number
   reason: string | null
+  /** model that investigated this item (recorded when the dig starts) */
+  model: string | null
+  /** 1 = next investigation should escalate to the strong model (set by Re-investigate) */
+  escalate: number
 }
 
 export const INVESTIGATE_THRESHOLD = 55
@@ -57,9 +61,19 @@ export function openStore() {
     patch TEXT,
     pr_url TEXT,
     cost REAL NOT NULL DEFAULT 0,
-    reason TEXT
+    reason TEXT,
+    model TEXT,
+    escalate INTEGER NOT NULL DEFAULT 0
   )`)
   db.run(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
+
+  // migrations for DBs created before these columns existed (no-op on fresh DBs — duplicate-column throws and is swallowed)
+  for (const stmt of [
+    'ALTER TABLE items ADD COLUMN model TEXT',
+    'ALTER TABLE items ADD COLUMN escalate INTEGER NOT NULL DEFAULT 0',
+  ]) {
+    try { db.run(stmt) } catch {}
+  }
 
   const store = {
     db,

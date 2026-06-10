@@ -134,9 +134,9 @@ export function startServer(deps: {
           return Response.json({ ok: true })
         }
 
-        // fresh eyes: requeue and re-run the investigation (costs one budget unit)
+        // fresh eyes: requeue and re-run on the STRONG model (costs one budget unit)
         if (action === 'reinvestigate') {
-          store.update(item.id, { status: 'queued', evidence: null, patch: null, reason: 'fresh look requested by you' })
+          store.update(item.id, { status: 'queued', evidence: null, patch: null, escalate: 1, reason: 'fresh look requested by you — escalating to the strong model' })
           deps.requestCycle()
           return Response.json({ ok: true })
         }

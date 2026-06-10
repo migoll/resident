@@ -46,10 +46,13 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
 - [ ] **Command-type approvals**: findings whose right fix is a command (lockfile refresh,
       `bun update x y`) get an approvable action with a per-repo command allowlist — closes the
       gap discovered on day one (el-plato investigation correctly refused to hand-diff a lockfile)
-- [ ] **Model tiering**: config default `sonnet` for investigations; escalate to the big model
-      only for score ≥ 85 or on Re-investigate
-- [ ] **Cost accounting for killed runs**: estimate from elapsed time × model rate when the final
-      JSON never arrives (today: spent-but-unrecorded)
+- [x] **Model tiering**: config default `sonnet` for investigations; escalate to the big model
+      only for score ≥ 85 or on Re-investigate (legacy `model` still pins everything; model recorded
+      per finding + shown in the inbox)
+- [x] **Cost accounting for killed runs**: estimate from elapsed time × model rate when the final
+      JSON never arrives (wall-clock × per-tier $/min, opus:sonnet:haiku ≈ 5:3:1, opus fallback so it
+      over- never under-counts; flagged as an estimate). NB: runs orphaned by killing the daemon
+      itself still fall to reconcile() — only intra-lifetime timeouts/crashes are estimated.
 - [ ] **Smoke tests + CI**: senses/triage/store/watch-API covered; GitHub Actions on the repo;
       Resident watches its own CI (dogfood loop closes)
 - [ ] **Hygiene**: log rotation, archive items older than N days, `resident doctor`
@@ -119,3 +122,6 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
 - 2026-06-10 — PocketPane PR #1 merged (first real outcome); v0.2: reconciliation, outcome
   tracking, issue/restore/reinvestigate, blindness detector, watchlist editing, PWA shell,
   launchd + notifications; public on GitHub (AGPL-3.0); moved to ~/.resident/app after TCC incident
+- 2026-06-10 — Phase 1: model tiering (sonnet base → opus on score ≥85 or Re-investigate; legacy
+  `model` still pins) + killed-run cost estimation (wall-clock × per-tier rate). Model shown per
+  finding in the inbox. First live dig under tiering correctly routed a score-60 finding to sonnet.

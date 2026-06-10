@@ -1,5 +1,5 @@
 import { readdirSync } from 'node:fs'
-import type { Config } from './config'
+import { investigationModel, type Config } from './config'
 import { runSenses } from './senses'
 import { investigate, branchFor } from './hands'
 import { notify } from './notify'
@@ -121,18 +121,25 @@ export async function cycle(
         notify(cfg, 'Resident: alert', item.title)
         continue
       }
-      log(`  ⚒ investigating: ${item.title} [${item.repo}]`)
-      store.update(item.id, { status: 'investigating' })
+      // routine digs run on the cheap base model; high scores and Re-investigate earn the strong one
+      const escalate = !!item.escalate
+      const model = investigationModel(cfg, item.score, escalate)
+      log(`  ⚒ investigating: ${item.title} [${item.repo}] · ${model}${escalate ? ' (escalated)' : ''}`)
+      store.update(item.id, { status: 'investigating', model, escalate: 0 })
       store.bumpToday()
-      const res = await investigate(item, repo.path, cfg.model)
+      const res = await investigate(item, repo.path, model)
       store.addCost(res.cost)
       if (res.ok) {
         store.update(item.id, { status: 'ready', evidence: res.evidence, patch: res.patch, cost: res.cost })
-        log(`    → ready (${res.patch ? 'fix proposed' : 'no patch'}, $${res.cost.toFixed(2)})`)
+        log(`    → ready (${res.patch ? 'fix proposed' : 'no patch'}, ${model}, $${res.cost.toFixed(2)})`)
         notify(cfg, 'Resident: ready for you', `${item.title} [${item.repo}]${res.patch ? ' — fix proposed, one tap to PR' : ''}`)
       } else {
-        store.update(item.id, { status: 'failed', evidence: res.evidence, reason: 'investigation errored' })
-        log(`    → failed`)
+        // killed/timed-out runs spend real money before dying — record the estimate so the budget ledger isn't fooled
+        store.update(item.id, {
+          status: 'failed', evidence: res.evidence, cost: res.cost,
+          reason: res.costEstimated ? `investigation killed — est. $${res.cost.toFixed(2)} spent before final accounting` : 'investigation errored',
+        })
+        log(`    → failed${res.costEstimated ? ` (est. $${res.cost.toFixed(2)})` : ''}`)
       }
       investigated++
     }

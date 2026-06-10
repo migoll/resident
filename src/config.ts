@@ -17,8 +17,12 @@ export interface RepoCfg {
 export interface Config {
   intervalMinutes: number
   budgets: { perCycle: number; perDay: number }
-  /** optional model override for investigations, e.g. "haiku" */
+  /** @deprecated legacy pin: if set, forces EVERY investigation onto this model (disables tiering). Prefer `models`. */
   model?: string
+  /** model tiering for investigations: a cheap base model for routine digs, a stronger one for the hard cases */
+  models?: { base?: string; escalated?: string }
+  /** investigations scoring at/above this escalate to models.escalated (default 85); Re-investigate always escalates */
+  escalateScore?: number
   /** interface for the inbox server (default 127.0.0.1; "0.0.0.0" for LAN/Tailscale access) */
   bind?: string
   /** push endpoint: an ntfy topic URL (e.g. https://ntfy.sh/your-secret-topic) or a Slack incoming webhook */
@@ -32,6 +36,19 @@ export const DEFAULTS: Config = {
   budgets: { perCycle: 2, perDay: 10 },
   urls: ['https://homerunner.com'],
   repos: [],
+}
+
+/** Tiering defaults: routine digs run cheap; only high-signal/asked-for ones pay for the big model. */
+export const MODEL_DEFAULTS = { base: 'sonnet', escalated: 'opus', escalateScore: 85 } as const
+
+/** Which model investigates this item. Legacy `model` pins everything; otherwise base, escalating
+ *  on a high score or an explicit Re-investigate. Returns undefined only if a pin was set to "". */
+export function investigationModel(cfg: Config, score: number, escalate = false): string {
+  if (cfg.model) return cfg.model
+  const base = cfg.models?.base ?? MODEL_DEFAULTS.base
+  const escalated = cfg.models?.escalated ?? MODEL_DEFAULTS.escalated
+  const threshold = cfg.escalateScore ?? MODEL_DEFAULTS.escalateScore
+  return escalate || score >= threshold ? escalated : base
 }
 
 export function loadConfig(): Config | null {

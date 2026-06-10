@@ -19,11 +19,22 @@ const APPLY_TOOLS = [
   'Bash(git:*)', 'Bash(gh pr create:*)', 'Bash(gh pr view:*)', 'Bash(bun install:*)', 'Bash(bun run:*)',
 ]
 
-interface ClaudeResult { ok: boolean; text: string; cost: number }
+interface ClaudeResult { ok: boolean; text: string; cost: number; costEstimated?: boolean }
+
+/** Rough $/min by tier — used ONLY when a run dies before emitting its final-cost JSON (timeout/kill/crash),
+ *  so spent-but-unrecorded runs don't read as free in the budget ledger. Ratios track published per-token
+ *  pricing (opus:sonnet:haiku ≈ 5:3:1); the absolute rate is a deliberately conservative wall-clock heuristic,
+ *  and unknown models fall back to the opus rate so the ledger errs toward over-counting, never under. */
+function estimateCost(model: string | undefined, ms: number): number {
+  const m = (model ?? 'opus').toLowerCase()
+  const perMin = m.includes('haiku') ? 0.15 : m.includes('sonnet') ? 0.45 : 0.75
+  return +((perMin * Math.max(0, ms)) / 60_000).toFixed(2)
+}
 
 async function runClaude(prompt: string, cwd: string, tools: string[], model?: string, timeoutMs = 600_000, extraArgs: string[] = []): Promise<ClaudeResult> {
   const args = ['claude', '-p', prompt, '--output-format', 'json', '--allowedTools', ...tools, ...extraArgs]
   if (model) args.push('--model', model)
+  const t0 = Date.now()
   try {
     const p = Bun.spawn(args, { cwd, stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs, killSignal: 'SIGKILL', env: { ...process.env } })
     const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()])
@@ -32,10 +43,11 @@ async function runClaude(prompt: string, cwd: string, tools: string[], model?: s
       const j = JSON.parse(out)
       return { ok: code === 0 && !j.is_error, text: j.result ?? out, cost: Number(j.total_cost_usd ?? 0) }
     } catch {
-      return { ok: code === 0, text: (out || err).slice(0, 8000), cost: 0 }
+      // no final JSON → killed / timed-out / crashed mid-run; estimate spend from wall-clock
+      return { ok: code === 0, text: (out || err).slice(0, 8000), cost: estimateCost(model, Date.now() - t0), costEstimated: true }
     }
   } catch (e) {
-    return { ok: false, text: String(e), cost: 0 }
+    return { ok: false, text: String(e), cost: estimateCost(model, Date.now() - t0), costEstimated: true }
   }
 }
 
@@ -85,7 +97,7 @@ Be concrete and honest. If the finding is stale or a false positive, say so unde
 
   const res = await runClaude(prompt, repoPath, READONLY_TOOLS, model)
   saveTranscript(item.id, 'investigate', res.text)
-  return { ok: res.ok, evidence: res.text, patch: extractDiff(res.text), cost: res.cost }
+  return { ok: res.ok, evidence: res.text, patch: extractDiff(res.text), cost: res.cost, costEstimated: res.costEstimated }
 }
 
 /** Human clicked Approve: apply the proposed fix on a branch and open a PR.

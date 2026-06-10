@@ -103,6 +103,7 @@
   .tags { margin-left: auto; display: flex; gap: 6px; flex: none; align-items: center; }
   .tag { font-size: 11px; color: var(--text2); background: rgba(118, 118, 128, 0.18); padding: 2.5px 8px; border-radius: 100px; white-space: nowrap; text-decoration: none; }
   a.tag:hover { color: var(--accent); }
+  .tag.model { color: var(--accent); background: rgba(10, 132, 255, 0.13); }
 
   details { margin-top: 10px; }
   summary { cursor: pointer; color: var(--text2); font-size: 12.5px; user-select: none; }
@@ -249,6 +250,7 @@
       + '<span class="title">' + esc(i.title) + '</span>'
       + '<span class="tags">' + repoTag
       + '<span class="tag">' + esc(i.sense + '/' + i.kind) + '</span>'
+      + (i.model ? '<span class="tag model" title="model that investigated this finding">' + esc(i.model) + '</span>' : '')
       + (i.status === 'investigating' ? '<span class="tag"><span class="spin"></span></span>' : '')
       + '</span></div>'
       + body + actions
