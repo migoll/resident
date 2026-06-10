@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs'
 import type { Config } from './config'
 import { runSenses } from './senses'
 import { investigate, branchFor } from './hands'
+import { notify } from './notify'
 import { INVESTIGATE_THRESHOLD, type Store } from './store'
 
 export interface DaemonState {
@@ -117,6 +118,7 @@ export async function cycle(
       if (!repo) {
         // repo-less alert (uptime, self): surface directly, nothing to dig through
         store.update(item.id, { status: 'ready', reason: item.sense === 'self' ? 'action needed on your Mac' : 'alert — no local repo to investigate' })
+        notify(cfg, 'Resident: alert', item.title)
         continue
       }
       log(`  ⚒ investigating: ${item.title} [${item.repo}]`)
@@ -127,6 +129,7 @@ export async function cycle(
       if (res.ok) {
         store.update(item.id, { status: 'ready', evidence: res.evidence, patch: res.patch, cost: res.cost })
         log(`    → ready (${res.patch ? 'fix proposed' : 'no patch'}, $${res.cost.toFixed(2)})`)
+        notify(cfg, 'Resident: ready for you', `${item.title} [${item.repo}]${res.patch ? ' — fix proposed, one tap to PR' : ''}`)
       } else {
         store.update(item.id, { status: 'failed', evidence: res.evidence, reason: 'investigation errored' })
         log(`    → failed`)

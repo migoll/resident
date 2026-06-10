@@ -30,10 +30,11 @@ printf '#!/bin/sh\nexec bun %s/src/cli.ts "$@"\n' "$PWD" > ~/.bun/bin/resident &
 resident init    # discovers your repos → ~/.resident/config.json
 resident once    # one foreground cycle — see what it finds right now
 resident start   # the daemon: cycles forever + inbox UI on :5117
-resident open    # open the inbox
+resident open    # open the inbox (--app for a chromeless desktop window)
+resident install # or: run permanently via launchd — starts at login, restarts if killed
 ```
 
-Config lives in `~/.resident/config.json`: repos, watched URLs, cycle interval, budgets, optional `"model"` override (e.g. `"sonnet"` for cheaper investigations). State in `~/.resident/resident.db`, investigation transcripts in `~/.resident/runs/`.
+Config lives in `~/.resident/config.json`: repos, watched URLs, cycle interval, budgets, optional `"model"` override (e.g. `"sonnet"` for cheaper investigations), and optional `"notify"` — point it at an [ntfy](https://ntfy.sh) topic URL or a Slack incoming webhook and Resident pings your phone when something's ready for you, when a PR opens, or when a site goes down. State in `~/.resident/resident.db`, investigation transcripts in `~/.resident/runs/`. The watchlist is also editable from the inbox itself (the chips row).
 
 ## Run it on a spare machine
 
@@ -43,8 +44,10 @@ An old MacBook, a Mac mini, a home server — the same boxes people park OpenCla
 # on the spare machine (logged into claude + gh once):
 git clone <your repos> ~/repos/...     # resident scans local clones
 resident init                          # then edit ~/.resident/config.json:
-#   "repos": [{ "path": "...", "name": "...", "pull": true }]   ← pull:true keeps clones fresh
-resident start --lan                   # binds 0.0.0.0, prints the URL for your other devices
+#   "repos":  [{ "path": "...", "name": "...", "pull": true }]   ← pull:true keeps clones fresh
+#   "bind":   "0.0.0.0"                                          ← reachable from your other devices
+#   "notify": "https://ntfy.sh/<your-secret-topic>"              ← pings your phone
+resident install                       # permanent: starts at login, restarts if killed
 ```
 
 Notes for laptop-as-server: keep it on power and enable *Prevent automatic sleeping when display is off* (System Settings → Battery → Options) so it works with the lid closed. The inbox has no auth — on anything beyond your home network, put it behind [Tailscale](https://tailscale.com) and reach it via the tailnet IP from your phone anywhere.

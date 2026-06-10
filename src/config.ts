@@ -21,6 +21,8 @@ export interface Config {
   model?: string
   /** interface for the inbox server (default 127.0.0.1; "0.0.0.0" for LAN/Tailscale access) */
   bind?: string
+  /** push endpoint: an ntfy topic URL (e.g. https://ntfy.sh/your-secret-topic) or a Slack incoming webhook */
+  notify?: string
   urls: string[]
   repos: RepoCfg[]
 }

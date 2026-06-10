@@ -5,6 +5,7 @@ import { saveConfig, type Config } from './config'
 import type { Store } from './store'
 import type { DaemonState } from './daemon'
 import { approve } from './hands'
+import { notify } from './notify'
 
 export function startServer(deps: {
   cfg: Config
@@ -184,9 +185,11 @@ export function startServer(deps: {
           if (res.ok) {
             store.update(item.id, { status: 'approved', pr_url: res.pr_url, cost: item.cost + res.cost })
             log(`  → ${res.pr_url}`)
+            notify(cfg, 'Resident: PR opened', `${item.title}\n${res.pr_url}`)
           } else {
             store.update(item.id, { status: 'failed', reason: 'apply/PR failed — see runs log' })
             log(`  → approve failed`)
+            notify(cfg, 'Resident: approve failed', item.title)
           }
         })()
         return Response.json({ ok: true })

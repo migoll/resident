@@ -18,8 +18,12 @@ ${B}usage${R}
   resident once          run a single cycle in the foreground (great first run)
                            --investigations <n>   cap claude investigations (default config)
   resident start         run the daemon: cycles forever + inbox UI
+                           --lan   bind 0.0.0.0 for other devices (Tailscale advised)
+  resident install       run permanently via launchd (auto-start at login, restarts if killed)
+  resident uninstall     remove the launchd service
+  resident stop          stop the daemon however it's running
   resident status        what it knows right now
-  resident open          open the inbox
+  resident open          open the inbox (--app for a chromeless window)
 
 ${B}how it behaves${R}
   Everything autonomous is read-only (shadow mode): it watches, investigates,
@@ -145,6 +149,64 @@ ${B}resident status${R}
       Bun.spawn(['open', url], { stdout: 'ignore', stderr: 'ignore' })
     }
     console.log(url)
+    break
+  }
+
+  case 'install': {
+    ensureConfig()
+    const plistPath = `${process.env.HOME}/Library/LaunchAgents/com.resident.daemon.plist`
+    const appCli = new URL('./cli.ts', import.meta.url).pathname
+    // launchd starts with a bare PATH — resolve where the tools actually live
+    const dirs = new Set<string>(['/usr/bin', '/bin', '/usr/sbin', '/sbin'])
+    for (const tool of ['bun', 'gh', 'claude', 'git', 'portless']) {
+      const p = Bun.which(tool)
+      if (p) dirs.add(p.replace(/\/[^/]+$/, ''))
+    }
+    const bunPath = Bun.which('bun') ?? 'bun'
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.resident.daemon</string>
+  <key>ProgramArguments</key><array>
+    <string>${bunPath}</string>
+    <string>${appCli}</string>
+    <string>start</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${process.env.HOME}/.resident/resident.log</string>
+  <key>StandardErrorPath</key><string>${process.env.HOME}/.resident/resident.log</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>${[...dirs].join(':')}</string>
+    <key>HOME</key><string>${process.env.HOME}</string>
+  </dict>
+</dict></plist>
+`
+    await Bun.write(plistPath, plist)
+    Bun.spawnSync(['pkill', '-f', '.resident/app/src/cli.ts']) // hand over from any session-run daemon
+    const uid = process.getuid?.() ?? 501
+    Bun.spawnSync(['launchctl', 'bootout', `gui/${uid}/com.resident.daemon`], { stdout: 'pipe', stderr: 'pipe' })
+    const r = Bun.spawnSync(['launchctl', 'bootstrap', `gui/${uid}`, plistPath], { stdout: 'pipe', stderr: 'pipe' })
+    if (r.exitCode !== 0) Bun.spawnSync(['launchctl', 'load', '-w', plistPath], { stdout: 'pipe', stderr: 'pipe' })
+    console.log(`${G}✓${R} installed — resident now runs permanently (starts at login, restarts if killed)`)
+    console.log(`${D}  logs: ~/.resident/resident.log · remove with: resident uninstall${R}`)
+    break
+  }
+
+  case 'uninstall': {
+    const plistPath = `${process.env.HOME}/Library/LaunchAgents/com.resident.daemon.plist`
+    const uid = process.getuid?.() ?? 501
+    Bun.spawnSync(['launchctl', 'bootout', `gui/${uid}/com.resident.daemon`], { stdout: 'pipe', stderr: 'pipe' })
+    try { await Bun.file(plistPath).exists() && (await import('node:fs')).unlinkSync(plistPath) } catch {}
+    console.log(`${G}✓${R} launchd service removed (state in ~/.resident kept)`)
+    break
+  }
+
+  case 'stop': {
+    const uid = process.getuid?.() ?? 501
+    Bun.spawnSync(['launchctl', 'bootout', `gui/${uid}/com.resident.daemon`], { stdout: 'pipe', stderr: 'pipe' })
+    Bun.spawnSync(['pkill', '-f', '.resident/app/src/cli.ts'])
+    console.log(`${G}✓${R} stopped${existsSync(`${process.env.HOME}/Library/LaunchAgents/com.resident.daemon.plist`) ? ` ${D}(launchd service still installed — it will return at next login; resident uninstall to remove)${R}` : ''}`)
     break
   }
 
