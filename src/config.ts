@@ -45,6 +45,12 @@ export interface Config {
   bind?: string
   /** push endpoint: an ntfy topic URL (e.g. https://ntfy.sh/your-secret-topic) or a Slack incoming webhook */
   notify?: string
+  /** notification quiet hours, e.g. { start: "22:00", end: "08:00" } (may wrap midnight).
+   *  Pings are suppressed inside the window — the inbox itself never sleeps. */
+  quietHours?: { start: string; end: string }
+  /** "HH:MM" — once a day, the first cycle at/after this time sends ONE summary ping
+   *  (what's ready, what was spent) instead of Resident having pinged all night */
+  digest?: string
   urls: string[]
   repos: RepoCfg[]
 }

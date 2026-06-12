@@ -4,7 +4,7 @@ import { maybeRotateLog } from './hygiene'
 import { run } from './proc'
 import { runSenses } from './senses'
 import { investigate, branchFor } from './hands'
-import { notify } from './notify'
+import { notify, hm } from './notify'
 import { INVESTIGATE_THRESHOLD, MUTE_THRESHOLD, type Store } from './store'
 
 export interface DaemonState {
@@ -83,6 +83,28 @@ function blindnessCheck(cfg: Config, store: Store) {
   } else {
     store.db.run("UPDATE items SET status='closed', reason='resolved — repos are visible again', updated=? WHERE hash='self|blind' AND status IN ('queued','ready')", [Date.now()])
   }
+}
+
+/** Once a day, the first cycle at/after the configured digest time sends ONE summary ping —
+ *  the morning-coffee read of what accumulated while pings were quiet. `send` is injectable
+ *  for tests; the flag is set before sending (a lost digest is never retried — silence > spam). */
+export function maybeDigest(cfg: Config, store: Store, log: (s: string) => void, send = notify, now = new Date()) {
+  if (!cfg.digest) return
+  const t = hm(cfg.digest)
+  if (Number.isNaN(t)) return
+  if (now.getHours() * 60 + now.getMinutes() < t) return
+  const key = 'digest:' + now.toISOString().slice(0, 10)
+  if (store.metaGet(key)) return
+  store.metaSet(key, String(Date.now()))
+  const ready = store.items(150).filter((i) => i.status === 'ready')
+  const queued = store.queued(99).length
+  const lines = [
+    ready.length ? `${ready.length} ready for you${queued ? ` · ${queued} queued` : ''}` : `nothing needs you${queued ? ` — ${queued} queued` : ''}`,
+    ...ready.slice(0, 3).map((i) => `· ${i.title}${i.repo ? ` [${i.repo}]` : ''}`),
+    `$${store.costToday().toFixed(2)} AI spend today · ${store.usedToday()} investigation(s)`,
+  ]
+  log(`☉ digest sent (${ready.length} ready)`)
+  send(cfg, 'Resident: morning digest', lines.join('\n'), { force: true })
 }
 
 /** One full heartbeat: outcomes → sense → triage → investigate within budget. */
@@ -171,6 +193,8 @@ export async function cycle(
     const stillQueued = store.queued(99).length
     if (stillQueued) log(`  ${stillQueued} item(s) queued — investigation budget exhausted for now`)
   }
+
+  maybeDigest(cfg, store, log)
 
   log(`◉ cycle done in ${Math.round((Date.now() - t0) / 1000)}s`)
   return { findings: findings.length, new: fresh, investigated }
