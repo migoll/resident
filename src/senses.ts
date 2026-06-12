@@ -18,7 +18,7 @@ const h = (s: string) => 'f' + Bun.hash(s).toString(36)
 const DAY = 86_400_000
 
 // ---------------------------------------------------------------- git
-async function gitSense(repo: RepoCfg): Promise<Finding[]> {
+export async function gitSense(repo: RepoCfg): Promise<Finding[]> {
   const out: Finding[] = []
   // server mode: keep dedicated-machine clones fresh before judging them
   if (repo.pull) await run(['git', 'pull', '--ff-only', '--quiet'], repo.path, 60_000)
@@ -50,7 +50,7 @@ async function gitSense(repo: RepoCfg): Promise<Finding[]> {
 }
 
 // ---------------------------------------------------------------- deps
-async function depsSense(repo: RepoCfg): Promise<Finding[]> {
+export async function depsSense(repo: RepoCfg): Promise<Finding[]> {
   const out: Finding[] = []
   if (!existsSync(join(repo.path, 'package.json'))) return out
 
@@ -211,7 +211,7 @@ export async function sentrySense(cfg: Config): Promise<Finding[]> {
 
 // ---------------------------------------------------------------- github
 let ghOk: boolean | null = null
-async function githubSense(repo: RepoCfg): Promise<Finding[]> {
+export async function githubSense(repo: RepoCfg): Promise<Finding[]> {
   const out: Finding[] = []
   if (ghOk === null) ghOk = (await run(['gh', 'auth', 'status'], undefined, 10_000)).ok
   if (!ghOk) return out

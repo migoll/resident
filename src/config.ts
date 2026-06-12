@@ -2,7 +2,9 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSy
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-export const HOME = join(homedir(), '.resident')
+/** State dir (config, db, transcripts). `RESIDENT_HOME` overrides it — relocated installs and
+ *  tests (which must never touch the real ~/.resident) both ride this. Read once, at import time. */
+export const HOME = process.env.RESIDENT_HOME || join(homedir(), '.resident')
 export const CONFIG_PATH = join(HOME, 'config.json')
 
 export interface RepoCfg {
