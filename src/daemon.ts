@@ -5,7 +5,7 @@ import { run } from './proc'
 import { runSenses } from './senses'
 import { investigate, branchFor } from './hands'
 import { notify } from './notify'
-import { INVESTIGATE_THRESHOLD, type Store } from './store'
+import { INVESTIGATE_THRESHOLD, MUTE_THRESHOLD, type Store } from './store'
 
 export interface DaemonState {
   nextCycleAt: number
@@ -107,13 +107,19 @@ export async function cycle(
   const findings = await runSenses(cfg, log)
 
   let fresh = 0
+  const mutes = new Map(store.mutes().map((m) => [`${m.repo}|${m.kind}`, m.source]))
   for (const f of findings) {
-    const status = f.score >= INVESTIGATE_THRESHOLD ? 'queued' : 'ignored'
+    const muteSrc = mutes.get(`${f.repo}|${f.kind}`)
+    const status = !muteSrc && f.score >= INVESTIGATE_THRESHOLD ? 'queued' : 'ignored'
     const res = store.upsertFinding({
       ...f,
       status,
-      reason: status === 'ignored' ? `below threshold (score ${f.score})` : undefined,
-    })
+      reason: status === 'ignored'
+        ? muteSrc === 'auto' ? `muted — you've dismissed ${f.kind} in ${f.repo || 'alerts'} ${MUTE_THRESHOLD}×; unmute from the inbox`
+        : muteSrc ? 'muted by you — unmute from the inbox'
+        : `below threshold (score ${f.score})`
+        : undefined,
+    }, !!muteSrc)
     if (res === 'new') fresh++
   }
   log(`  ${findings.length} findings (${fresh} new)`)

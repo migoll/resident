@@ -14,7 +14,7 @@ Every AI coding tool so far has the same dead spot: a blinking cursor, waiting f
 ## What it does today
 
 - **Watches** your repos and sites every cycle, for free: git state (uncommitted work, stale branches, TODO rot), `bun outdated` / `bun audit`, typecheck, uptime/latency, GitHub PRs with failing checks or conflicts, fresh issues.
-- **Judges** every finding with a score. Below threshold → logged visibly with its reasoning (you can always audit what it chose to ignore). Above → queued for investigation, capped by budgets (default 2/cycle, 10/day).
+- **Judges** every finding with a score. Below threshold → logged visibly with its reasoning (you can always audit what it chose to ignore). Above → queued for investigation, capped by budgets (default 2/cycle, 10/day). Your dismissals teach it: the third "no" on a kind-in-a-repo auto-mutes that kind — a 🔇 chip in the inbox, one tap to reverse. Blindness alerts can never be muted.
 - **Investigates** queued findings with headless Claude sessions locked to a read-only toolset: root cause, file:line evidence, ONE minimal proposed diff, risk rating. Full transcripts on disk.
 - **Acts only when you click.** Approve → applies the fix in a disposable git worktree (your checkout is never touched), pushes a `resident/*` branch, opens a PR. Or open a tracking issue instead (deterministic, no AI cost). Or dismiss — and restore later if you regret it.
 - **Remembers what matters.** Each watched repo has a small, editable notebook in the inbox for decisions, conventions, known false positives, and failed approaches. Investigations read it as context and append only concise, verified learnings — the notes always stay visible and yours to edit.

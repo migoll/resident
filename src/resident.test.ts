@@ -7,7 +7,7 @@ import { formatCheck, exitCode, type Check } from './doctor'
 import { estimateCost, extractCommand, extractMemoryUpdate, investigationPrompt, branchFor } from './hands'
 import { fileLogger } from './hygiene'
 import { scoreSentryIssue } from './senses'
-import { openStore, INVESTIGATE_THRESHOLD } from './store'
+import { openStore, INVESTIGATE_THRESHOLD, MUTE_THRESHOLD } from './store'
 
 const CFG: Config = { intervalMinutes: 15, budgets: { perCycle: 2, perDay: 10 }, urls: [], repos: [] }
 const REPO: RepoCfg = { path: '/x', name: 'r', commands: ['bun update', 'bun install', 'bun add'] }
@@ -201,6 +201,59 @@ describe('branchFor', () => {
   test('deterministic, slugged, length-capped', () => {
     expect(branchFor({ id: 7, title: 'PR #20 has merge conflicts — “Added plants”' })).toBe('resident/7-pr-20-has-merge-conflicts-added-plants')
     expect(branchFor({ id: 7, title: 'x'.repeat(100) }).length).toBeLessThanOrEqual('resident/7-'.length + 40)
+  })
+})
+
+// ---------------------------------------------------------------- dismissals teach (mutes)
+describe('dismissals teach', () => {
+  const dismiss = (s: any, hash: string, kind = 'stale-branches', repo = 'r', sense = 'git') => {
+    s.upsertFinding({ hash, sense, repo, kind, title: 't', detail: '', score: 60, status: 'queued' })
+    s.update(s.items(99).find((i: any) => i.hash === hash)!.id, { status: 'dismissed' })
+  }
+  test('the MUTE_THRESHOLDth distinct dismissal of a (repo, kind) earns an auto-mute — once', () => {
+    const s = openStore(':memory:')
+    dismiss(s, 'a'); expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(false)
+    dismiss(s, 'b'); expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(false)
+    dismiss(s, 'c'); expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(true)
+    expect(s.isMuted('r', 'stale-branches')).toBe(true)
+    expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(false) // already muted — never re-announces
+  })
+  test('dismissals only count within their own (repo, kind)', () => {
+    const s = openStore(':memory:')
+    dismiss(s, 'a', 'todos', 'r1')
+    dismiss(s, 'b', 'todos', 'r2')
+    dismiss(s, 'c', 'outdated', 'r1')
+    expect(s.maybeAutoMute('r1', 'todos', 'git')).toBe(false)
+  })
+  test('blindness never mutes, however often it is dismissed', () => {
+    const s = openStore(':memory:')
+    for (const h of ['a', 'b', 'c', 'd']) dismiss(s, h, 'blind', '', 'sentry')
+    expect(s.maybeAutoMute('', 'blind', 'sentry')).toBe(false)
+    expect(s.maybeAutoMute('', 'anything', 'self')).toBe(false)
+    expect(s.isMuted('', 'blind')).toBe(false)
+  })
+  test('unmute resets the evidence — only dismissals after it count toward re-muting', () => {
+    const s = openStore(':memory:')
+    for (const h of ['a', 'b', 'c']) dismiss(s, h)
+    s.maybeAutoMute('r', 'stale-branches', 'git')
+    s.removeMute('r', 'stale-branches')
+    expect(s.isMuted('r', 'stale-branches')).toBe(false)
+    expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(false) // the old 3 no longer count
+  })
+  test('manual mutes stick and duplicates keep the original', () => {
+    const s = openStore(':memory:')
+    s.addMute('r', 'todos', 'manual')
+    expect(s.isMuted('r', 'todos')).toBe(true)
+    s.addMute('r', 'todos', 'auto')
+    expect(s.mutes()).toHaveLength(1)
+    expect(s.mutes()[0].source).toBe('manual')
+  })
+  test('a muted kind is never promoted back to queued by a high score', () => {
+    const s = openStore(':memory:')
+    const f = { hash: 'h', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 20, status: 'ignored' as const }
+    s.upsertFinding(f)
+    s.upsertFinding({ ...f, score: 90 }, true)
+    expect(s.items(10)[0].status).toBe('ignored')
   })
 })
 

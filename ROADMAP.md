@@ -77,7 +77,7 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
 - [x] **Memory layer** (the compounding asset): per-repo durable notes — decisions, known
       false-positives, conventions, "tried X, failed because Y". Investigations read memory
       before digging and write back after. Surfaced + editable in the inbox.
-- [ ] **Dismissals teach**: repeated dismissal of a kind/repo dampens its score automatically
+- [x] **Dismissals teach**: repeated dismissal of a kind/repo dampens its score automatically
       ("you've dismissed stale-branches in tierflix 3× → auto-ignore, reversible in settings")
 - [ ] **Graduated autonomy**: per-repo, per-kind authority earned from accept-rate —
       shadow → auto-PR (no click) → auto-merge (trivial classes, CI-green, small diffs only).
@@ -156,6 +156,11 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   (new fatal 92 / new error 82 / regressed 78 / warnings + old noise below threshold), project↔repo
   mapping for codebase digs, blind-on-rejected-token. Verified live against the chrlnd org incl.
   the blindness path. Token in config only, never in the repo or transcripts.
+- 2026-06-13 — dismissals teach: the 3rd distinct dismissal of a (repo, kind) earns an auto-mute —
+  future findings of that kind arrive pre-ignored with an explicit "muted" reason (judgment stays
+  visible, as always), shown as 🔇 chips in the inbox, reversible in one tap. Unmuting resets the
+  evidence: only dismissals after it count toward re-muting. Blindness is never mutable. A mute
+  also blocks the score-promotion path, and /api/mute + /api/unmute allow manual control.
 - 2026-06-10 — "do better" pass: one shared proc.run() helper (kills 3 duplicated spawn wrappers;
   `stdout` kept separate from combined output so gh/git stderr warnings can't corrupt JSON parses);
   reconcile/refreshOutcomes async — gh calls no longer freeze the inbox server mid-cycle;

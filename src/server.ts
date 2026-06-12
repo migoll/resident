@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
 import { saveConfig, commandAllowed, applyModel, type Config } from './config'
-import { MAX_MEMORY_CHARS, type Store } from './store'
+import { MAX_MEMORY_CHARS, MUTE_THRESHOLD, type Store } from './store'
 import type { DaemonState } from './daemon'
 import { approve, applyCommand } from './hands'
 import { notify } from './notify'
@@ -79,7 +79,27 @@ export function startServer(deps: {
           items: store.items(150).map((it) =>
             it.command ? { ...it, commandAllowed: commandAllowed(cfg.repos.find((r) => r.name === it.repo), it.command) } : it,
           ),
+          mutes: store.mutes(),
         })
+      }
+
+      // learned silences: {repo, kind} — mute a kind manually, or reverse an earned mute
+      if ((url.pathname === '/api/mute' || url.pathname === '/api/unmute') && req.method === 'POST') {
+        let body: any
+        try { body = await req.json() } catch { return Response.json({ ok: false, error: 'bad json' }, { status: 400 }) }
+        const repo = String(body.repo ?? '').trim()
+        const kind = String(body.kind ?? '').trim()
+        if (!kind) return Response.json({ ok: false, error: 'need kind' }, { status: 400 })
+        if (url.pathname === '/api/mute') {
+          // blindness is never mutable — quiet and blind must never look the same
+          if (kind === 'blind') return Response.json({ ok: false, error: 'blindness can’t be muted' }, { status: 400 })
+          store.addMute(repo, kind, 'manual')
+          log(`🔇 muted ${kind} in ${repo || 'alerts'} (by you)`)
+        } else {
+          store.removeMute(repo, kind)
+          log(`🔊 unmuted ${kind} in ${repo || 'alerts'}`)
+        }
+        return Response.json({ ok: true })
       }
 
       if (url.pathname === '/api/cycle' && req.method === 'POST') {
@@ -155,6 +175,9 @@ export function startServer(deps: {
 
         if (action === 'dismiss') {
           store.update(item.id, { status: 'dismissed' })
+          // dismissals teach: the MUTE_THRESHOLDth distinct "no" on this (repo, kind) earns a mute
+          if (store.maybeAutoMute(item.repo, item.kind, item.sense))
+            log(`🔇 learned: ${item.kind} in ${item.repo || 'alerts'} dismissed ${MUTE_THRESHOLD}× — auto-muted (reversible in the inbox)`)
           return Response.json({ ok: true })
         }
 
