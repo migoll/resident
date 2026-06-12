@@ -134,7 +134,7 @@ export async function cycle(
       store.update(item.id, { status: 'investigating', model, reason: null }) // clear stale queued/requeue reason
       store.bumpToday()
       // the dig reads this repo's durable memory first — earned context is the whole point of it
-      const res = await investigate(item, repo.path, model, store.memories(item.repo).map((m) => m.note))
+      const res = await investigate(item, repo.path, model, store.memories(item.repo))
       store.addCost(res.cost)
       if (res.ok) {
         store.update(item.id, { status: 'ready', evidence: res.evidence, patch: res.patch, command: res.command, cost: res.cost, escalate: 0 })

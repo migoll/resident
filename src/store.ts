@@ -178,9 +178,12 @@ export function openStore(dbPath?: string) {
     },
 
     /** Write a durable note (deduped on normalized text — a re-learned lesson refreshes
-     *  the existing note instead of duplicating it, which also shields it from pruning). */
+     *  the existing note instead of duplicating it, which also shields it from pruning).
+     *  Whitespace is collapsed to ONE line on write: notes are injected into future dig
+     *  prompts as single bullets, and a newline in stored memory could forge prompt
+     *  structure (fake section headers, fenced blocks). Flat text can't. */
     addMemory(repo: string, note: string, source: Memory['source']): 'new' | 'duplicate' {
-      const text = note.trim().slice(0, 500)
+      const text = note.replace(/\s+/g, ' ').trim().slice(0, 500)
       if (!text || !repo) return 'duplicate'
       const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
       const now = Date.now()
@@ -197,9 +200,10 @@ export function openStore(dbPath?: string) {
       return 'new'
     },
 
-    /** Human edited a note in the inbox — it's theirs now, whoever first wrote it. */
+    /** Human edited a note in the inbox — it's theirs now, whoever first wrote it.
+     *  Same single-line collapse as addMemory (both human paths must hold the invariant). */
     updateMemory(id: number, note: string) {
-      const text = note.trim().slice(0, 500)
+      const text = note.replace(/\s+/g, ' ').trim().slice(0, 500)
       if (!text) return
       db.run("UPDATE memories SET note=?, source='human', updated=? WHERE id=?", [text, Date.now(), id])
     },
