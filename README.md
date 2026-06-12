@@ -26,9 +26,9 @@ The *act* part — something triggers, an agent runs, a PR appears — is commod
 
 A trigger is a boolean, not judgment. What it can't give you:
 
-- **State between runs.** A cron'd agent re-discovers the same stale branch every cycle — then either re-spends tokens re-investigating it or spams duplicate PRs. Resident's store means a finding is judged once, deduped forever, and its outcome (merged, dismissed, closed unmerged) feeds back.
+- **State between runs.** A cron'd agent re-discovers the same stale branch every cycle — then either re-spends tokens re-investigating it or spams duplicate PRs. Resident's store means a finding is judged once, deduped forever, and its outcome (merged, dismissed, closed unmerged) is remembered.
 - **Free senses gating paid judgment.** Re-deriving "does this matter?" in model calls every 15 minutes is expensive and inconsistent. Resident's senses are deterministic and free; tokens are spent only past a scored threshold, under hard budget ceilings. That inversion is what makes always-on affordable at all.
-- **Signals with no event to subscribe to.** Nothing fires a webhook when a branch goes stale, a dependency drifts, latency creeps, or a Sentry error fades into old noise. Those signals exist only because something polls and compares against what it saw last time.
+- **Signals with no event to subscribe to.** Nothing fires a webhook when a branch goes stale, a dependency drifts, a site slows past its limit, or a Sentry error fades into old noise. Those signals exist only because something polls for them on a heartbeat.
 - **An accountability loop.** A CI-triggered agent doesn't know its last PR was closed unmerged, can't show you what it chose to ignore, and never learns from your dismissals. Resident's inbox is built around visible judgment — everything ignored, with its reason.
 
 Notice → judge → remember → stay quiet is the product. The PR at the end is the easy part.

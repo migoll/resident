@@ -8,7 +8,7 @@
 watches, judges, investigates, and comes to you with evidence. The product is not the agent;
 it's the **judgment** (what to act on, what to ask, what to shut up about) and the **trust ramp**
 (read-only → propose → act, earned per repo). The act itself — trigger fires, agent runs, PR
-appears — is commodity; a trigger is a boolean, not judgment. Notice → judge → remember → stay
+appears — is commodity. A trigger is a boolean, not judgment. Notice → judge → remember → stay
 quiet is what the boolean can't give you — the PR at the end is the easy part.
 
 **Definition of done (1.0):** a developer who isn't Christian installs it in under 10 minutes,
