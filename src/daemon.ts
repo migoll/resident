@@ -93,7 +93,9 @@ export function maybeDigest(cfg: Config, store: Store, log: (s: string) => void,
   const t = hm(cfg.digest)
   if (Number.isNaN(t)) return
   if (now.getHours() * 60 + now.getMinutes() < t) return
-  const key = 'digest:' + now.toISOString().slice(0, 10)
+  // LOCAL date key, matching the local time gate above — a UTC key would mint a second key
+  // mid-local-day for small-hours digest times in UTC+ zones (double-fire, then drift)
+  const key = `digest:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   if (store.metaGet(key)) return
   store.metaSet(key, String(Date.now()))
   const ready = store.items(150).filter((i) => i.status === 'ready')
@@ -155,9 +157,11 @@ export async function cycle(
     for (const item of store.queued(budget)) {
       const repo = cfg.repos.find((r) => r.name === item.repo)
       if (!repo) {
-        // repo-less alert (uptime, self): surface directly, nothing to dig through
+        // repo-less alert (uptime, self): surface directly, nothing to dig through.
+        // Hard outages and blindness PIERCE quiet hours — a site down at 3am and a daemon gone
+        // blind are exactly what the phone alarm exists for; only calm pings sleep.
         store.update(item.id, { status: 'ready', reason: item.sense === 'self' ? 'action needed on your Mac' : 'alert — no local repo to investigate' })
-        notify(cfg, 'Resident: alert', item.title)
+        notify(cfg, 'Resident: alert', item.title, { force: item.kind === 'down' || item.kind === 'blind' })
         continue
       }
       // routine digs run on the cheap base model; high scores and Re-investigate earn the strong one

@@ -84,8 +84,9 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
       Authority changes are themselves inbox items you approve.
 - [ ] **Noise discipline**: morning digest mode, quiet hours, weekly "what I did" summary —
       Dependabot fatigue is the named enemy; silence > spam, always
-      *(progress 06-13: quiet hours + once-a-day morning digest shipped — pings suppressed in the
-      window, digest pierces it by design. Remaining: weekly summary.)*
+      *(progress 06-13: quiet hours + once-a-day morning digest shipped — calm pings suppressed
+      in the window; the digest, site-down/blindness alarms, and click feedback pierce it by
+      design. Remaining: weekly summary.)*
 - [ ] **Semantic dedupe**: same root cause across findings collapses into one item
 
 ## Phase 3 — Second user, then a team
@@ -167,10 +168,12 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   score-promotion path. Known boundary: single-hash kinds (outdated, typecheck, uptime) are
   one-row-forever by dedupe, so one dismissal already silences them — teaching applies to
   per-instance kinds (branches, PRs, issues, sentry errors).
-- 2026-06-13 — noise discipline (first half): `quietHours` suppress pings in a window that may
-  wrap midnight (work continues; the inbox is the record, pings are a convenience), `digest`
-  sends one morning summary — ready items, queued count, spend — once a day, piercing quiet
-  hours by design. Malformed windows fail noisy, never deaf. Weekly summary still open.
+- 2026-06-13 — noise discipline (first half): `quietHours` suppress the CALM pings in a window
+  that may wrap midnight (work continues; the inbox is the record, pings are a convenience) —
+  site-down/blindness alarms and click feedback force through, as does the `digest`: one morning
+  summary (ready items, queued count, spend) once a day, deduped on the LOCAL date so small-hours
+  digest times can't double-fire in UTC+ zones. Malformed or impossible times ("25:00") fail
+  noisy, never silently dead. Weekly summary still open.
 - 2026-06-10 — "do better" pass: one shared proc.run() helper (kills 3 duplicated spawn wrappers;
   `stdout` kept separate from combined output so gh/git stderr warnings can't corrupt JSON parses);
   reconcile/refreshOutcomes async — gh calls no longer freeze the inbox server mid-cycle;

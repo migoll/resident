@@ -197,7 +197,7 @@ describe('scoreSentryIssue', () => {
 })
 
 // ---------------------------------------------------------------- noise discipline
-import { hm, inQuietHours } from './notify'
+import { hm, inQuietHours, notify } from './notify'
 import { maybeDigest } from './daemon'
 
 describe('quiet hours', () => {
@@ -229,6 +229,38 @@ describe('quiet hours', () => {
     expect(hm(' 8:05 ')).toBe(485)
     expect(Number.isNaN(hm('8.30'))).toBe(true)
     expect(Number.isNaN(hm(''))).toBe(true)
+  })
+  test('hm rejects parseable-but-impossible times — a typo must not silently kill the digest', () => {
+    expect(Number.isNaN(hm('24:00'))).toBe(true)
+    expect(Number.isNaN(hm('25:00'))).toBe(true)
+    expect(Number.isNaN(hm('08:99'))).toBe(true)
+    expect(Number.isNaN(hm('23:60'))).toBe(true)
+    expect(hm('23:59')).toBe(1439)
+  })
+})
+
+describe('notify quiet-hours policy', () => {
+  const hhmm = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  // a window guaranteed to cover "now", whichever side of midnight we run on
+  const quietNow = (): Config => ({
+    ...CFG,
+    notify: 'https://ntfy.example/topic',
+    quietHours: { start: hhmm(new Date(Date.now() - 3_600_000)), end: hhmm(new Date(Date.now() + 3_600_000)) },
+  })
+  test('a non-forced ping is suppressed inside the window; force pierces it', async () => {
+    const calls: any[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (...a: any[]) => { calls.push(a); return new Response('') }) as any
+    try {
+      const cfg = quietNow()
+      expect(inQuietHours(cfg)).toBe(true) // sanity: the window really covers this moment
+      await notify(cfg, 'calm', 'suppressed')
+      expect(calls.length).toBe(0)
+      await notify(cfg, 'urgent', 'delivered', { force: true }) // down/blind alerts + click feedback use this
+      expect(calls.length).toBe(1)
+    } finally {
+      globalThis.fetch = realFetch
+    }
   })
 })
 

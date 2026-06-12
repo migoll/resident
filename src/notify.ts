@@ -1,9 +1,13 @@
 import type { Config } from './config'
 
-/** "HH:MM" → minutes since midnight; NaN when malformed. Exported for tests. */
+/** "HH:MM" → minutes since midnight; NaN when malformed OR out of range ("25:00", "08:99") —
+ *  a parseable-but-impossible time would otherwise gate a digest that can never fire, silently.
+ *  Exported for tests. */
 export function hm(s: string): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec(s?.trim() ?? '')
-  return m ? Number(m[1]) * 60 + Number(m[2]) : NaN
+  if (!m) return NaN
+  const h = Number(m[1]), min = Number(m[2])
+  return h > 23 || min > 59 ? NaN : h * 60 + min
 }
 
 /** True inside the configured quiet window (which may wrap midnight). A malformed or
