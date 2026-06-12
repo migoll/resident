@@ -158,9 +158,13 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   the blindness path. Token in config only, never in the repo or transcripts.
 - 2026-06-13 — dismissals teach: the 3rd distinct dismissal of a (repo, kind) earns an auto-mute —
   future findings of that kind arrive pre-ignored with an explicit "muted" reason (judgment stays
-  visible, as always), shown as 🔇 chips in the inbox, reversible in one tap. Unmuting resets the
-  evidence: only dismissals after it count toward re-muting. Blindness is never mutable. A mute
-  also blocks the score-promotion path, and /api/mute + /api/unmute allow manual control.
+  visible, as always), shown as 🔇 chips in the inbox with a live held-count, reversible in one
+  tap. Unmuting resets the evidence (only later dismissals count toward re-muting) and clears any
+  stale "muted" reasons. Sacred kinds never auto-mute: 'down' and 'fatal' only go quiet by explicit
+  /api/mute, and 'blind' is refused at the store boundary from every path. A mute also blocks the
+  score-promotion path. Known boundary: single-hash kinds (outdated, typecheck, uptime) are
+  one-row-forever by dedupe, so one dismissal already silences them — teaching applies to
+  per-instance kinds (branches, PRs, issues, sentry errors).
 - 2026-06-10 — "do better" pass: one shared proc.run() helper (kills 3 duplicated spawn wrappers;
   `stdout` kept separate from combined output so gh/git stderr warnings can't corrupt JSON parses);
   reconcile/refreshOutcomes async — gh calls no longer freeze the inbox server mid-cycle;

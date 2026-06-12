@@ -79,7 +79,9 @@ export function startServer(deps: {
           items: store.items(150).map((it) =>
             it.command ? { ...it, commandAllowed: commandAllowed(cfg.repos.find((r) => r.name === it.repo), it.command) } : it,
           ),
-          mutes: store.mutes(),
+          // each mute carries how many findings it is holding down right now — an active
+          // suppression must be visible at a glance, not discoverable by archaeology
+          mutes: store.mutes().map((m) => ({ ...m, holding: store.mutedHolding(m.repo, m.kind) })),
         })
       }
 
@@ -91,9 +93,8 @@ export function startServer(deps: {
         const kind = String(body.kind ?? '').trim()
         if (!kind) return Response.json({ ok: false, error: 'need kind' }, { status: 400 })
         if (url.pathname === '/api/mute') {
-          // blindness is never mutable — quiet and blind must never look the same
-          if (kind === 'blind') return Response.json({ ok: false, error: 'blindness can’t be muted' }, { status: 400 })
-          store.addMute(repo, kind, 'manual')
+          // the store refuses 'blind' from every path — quiet and blind must never look the same
+          if (!store.addMute(repo, kind, 'manual')) return Response.json({ ok: false, error: 'blindness can’t be muted' }, { status: 400 })
           log(`🔇 muted ${kind} in ${repo || 'alerts'} (by you)`)
         } else {
           store.removeMute(repo, kind)

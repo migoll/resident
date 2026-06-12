@@ -232,6 +232,33 @@ describe('dismissals teach', () => {
     expect(s.maybeAutoMute('', 'anything', 'self')).toBe(false)
     expect(s.isMuted('', 'blind')).toBe(false)
   })
+  test('sacred kinds never auto-mute: down and fatal stay loud however often dismissed', () => {
+    const s = openStore(':memory:')
+    for (const h of ['a', 'b', 'c', 'd']) dismiss(s, h, 'down', '', 'uptime')
+    expect(s.maybeAutoMute('', 'down', 'uptime')).toBe(false) // 3 dismissals must not disarm the 2am alarm
+    for (const h of ['e', 'f', 'g']) dismiss(s, h, 'fatal', 'r', 'sentry')
+    expect(s.maybeAutoMute('r', 'fatal', 'sentry')).toBe(false)
+    expect(s.addMute('', 'down', 'manual')).toBe(true) // explicit human intent is still allowed
+  })
+  test('blindness cannot be muted even explicitly — the store refuses from every path', () => {
+    const s = openStore(':memory:')
+    expect(s.addMute('', 'blind', 'manual')).toBe(false)
+    expect(s.isMuted('', 'blind')).toBe(false)
+  })
+  test('unmute clears the stale "muted" reasons it would otherwise leave lying', () => {
+    const s = openStore(':memory:')
+    s.addMute('r', 'k', 'manual')
+    s.upsertFinding({ hash: 'h', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 90, status: 'ignored', reason: 'muted by you — unmute from the inbox' }, true)
+    s.removeMute('r', 'k')
+    expect(s.items(1)[0].reason).toBeNull()
+  })
+  test('a mute reports how many findings it is currently holding down', () => {
+    const s = openStore(':memory:')
+    s.addMute('r', 'k', 'manual')
+    s.upsertFinding({ hash: 'h1', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 90, status: 'ignored', reason: 'muted by you — unmute from the inbox' }, true)
+    s.upsertFinding({ hash: 'h2', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 20, status: 'ignored', reason: 'below threshold (score 20)' })
+    expect(s.mutedHolding('r', 'k')).toBe(1) // only rows the mute is actually suppressing
+  })
   test('unmute resets the evidence — only dismissals after it count toward re-muting', () => {
     const s = openStore(':memory:')
     for (const h of ['a', 'b', 'c']) dismiss(s, h)

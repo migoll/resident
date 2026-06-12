@@ -68,6 +68,11 @@ export const INVESTIGATE_THRESHOLD = 55
 /** Distinct dismissals of one (repo, kind) before Resident learns to stop asking. */
 export const MUTE_THRESHOLD = 3
 
+/** Kinds whose silence may never be EARNED, only explicitly chosen — and 'blind' not even that.
+ *  Three routine dismissals must not be able to disarm the 2am alarm: hard outages ('down') and
+ *  fatal prod errors ('fatal') only go quiet when the human says so deliberately (/api/mute). */
+export const NEVER_AUTO_MUTE = new Set(['blind', 'down', 'fatal'])
+
 /** Open the item store. `dbPath` exists for tests (`:memory:`); production always uses the default. */
 export function openStore(dbPath?: string) {
   if (!dbPath) mkdirSync(HOME, { recursive: true })
@@ -267,15 +272,28 @@ export function openStore(dbPath?: string) {
       return !!db.query<any, any>('SELECT 1 FROM mutes WHERE repo=? AND kind=?').get(repo, kind)
     },
 
-    addMute(repo: string, kind: string, source: Mute['source']) {
+    /** False (and nothing stored) for 'blind' — blindness is never mutable, by anyone, from any
+     *  path. Enforced here at the store boundary so no caller can forget the rule. */
+    addMute(repo: string, kind: string, source: Mute['source']): boolean {
+      if (kind === 'blind') return false
       db.run('INSERT INTO mutes (repo, kind, created, source) VALUES (?,?,?,?) ON CONFLICT(repo, kind) DO NOTHING', [repo, kind, Date.now(), source])
+      return true
     },
 
     /** Unmute + remember WHEN — only dismissals after this moment count toward re-muting,
      *  so "I changed my mind" isn't instantly overruled by the old evidence. */
     removeMute(repo: string, kind: string) {
       db.run('DELETE FROM mutes WHERE repo=? AND kind=?', [repo, kind])
+      // un-lie the leftovers: ignored items still wearing a "muted" reason would point at a mute
+      // that no longer exists; the next cycle re-states the honest reason (or promotes outright)
+      db.run("UPDATE items SET reason=NULL, updated=? WHERE repo=? AND kind=? AND status='ignored' AND reason LIKE 'muted%'", [Date.now(), repo, kind])
       store.metaSet(`unmuted:${repo}|${kind}`, String(Date.now()))
+    },
+
+    /** How many findings a mute is currently holding down (ignored rows wearing its reason) —
+     *  an active suppression must be visible at a glance, not discoverable by archaeology. */
+    mutedHolding(repo: string, kind: string): number {
+      return db.query<any, any>("SELECT COUNT(*) n FROM items WHERE repo=? AND kind=? AND status='ignored' AND reason LIKE 'muted%'").get(repo, kind)?.n ?? 0
     },
 
     /** Distinct findings of this (repo, kind) currently dismissed, counted since the last unmute. */
@@ -285,13 +303,13 @@ export function openStore(dbPath?: string) {
     },
 
     /** Called on every human dismissal: the MUTE_THRESHOLDth distinct "no" on a (repo, kind)
-     *  earns a mute. Blindness is never mutable — quiet and blind must never look the same. */
+     *  earns a mute — except the sacred kinds (NEVER_AUTO_MUTE) and self-sense findings, where
+     *  routine dismissals must never accumulate into silence. */
     maybeAutoMute(repo: string, kind: string, sense: string): boolean {
-      if (kind === 'blind' || sense === 'self') return false
+      if (sense === 'self' || NEVER_AUTO_MUTE.has(kind)) return false
       if (store.isMuted(repo, kind)) return false
       if (store.dismissCount(repo, kind) < MUTE_THRESHOLD) return false
-      store.addMute(repo, kind, 'auto')
-      return true
+      return store.addMute(repo, kind, 'auto')
     },
   }
   return store

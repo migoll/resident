@@ -366,7 +366,7 @@
     const el = $('#mutes')
     el.style.display = ms.length ? '' : 'none'
     el.innerHTML = ms.map((m) =>
-      '<span class="chip" title="' + (m.source === 'auto' ? 'learned from your dismissals' : 'muted by you') + '">🔇 ' + esc(m.kind) + (m.repo ? ' · ' + esc(m.repo) : '')
+      '<span class="chip" title="' + (m.source === 'auto' ? 'learned from your dismissals' : 'muted by you') + (m.holding ? ' — currently holding ' + m.holding + ' finding' + (m.holding === 1 ? '' : 's') + ' below the line' : '') + '">🔇 ' + esc(m.kind) + (m.repo ? ' · ' + esc(m.repo) : '') + (m.holding ? ' · ' + m.holding + ' held' : '')
       + '<span class="x unmute" data-repo="' + esc(m.repo) + '" data-kind="' + esc(m.kind) + '" title="unmute — findings of this kind get judged again">×</span></span>').join('')
   }
   async function sendWatch(body) {
