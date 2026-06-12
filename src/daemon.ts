@@ -96,6 +96,11 @@ export async function cycle(
   maybeRotateLog() // before this cycle's lines append, never mid-stream
   log(`◉ cycle started — ${cfg.repos.length} repos, ${cfg.urls.length} url(s)`)
 
+  // retention: long-settled items leave the views (not the db) so the inbox and outcome polls stay lean
+  const retention = cfg.retentionDays ?? 30
+  const archived = store.archiveOld(retention)
+  if (archived > 0) log(`  🗄 archived ${archived} item(s) older than ${retention}d`)
+
   await refreshOutcomes(store, log)
   blindnessCheck(cfg, store)
 

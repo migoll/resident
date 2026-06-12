@@ -40,6 +40,8 @@ export interface Item {
   model: string | null
   /** 1 = next investigation should escalate to the strong model (set by Re-investigate) */
   escalate: number
+  /** 1 = aged out by retention — hidden from every view, kept as the audit trail */
+  archived: number
 }
 
 export const INVESTIGATE_THRESHOLD = 55
@@ -67,7 +69,8 @@ export function openStore(dbPath?: string) {
     reason TEXT,
     model TEXT,
     escalate INTEGER NOT NULL DEFAULT 0,
-    command TEXT
+    command TEXT,
+    archived INTEGER NOT NULL DEFAULT 0
   )`)
   db.run(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
 
@@ -76,6 +79,7 @@ export function openStore(dbPath?: string) {
     'ALTER TABLE items ADD COLUMN model TEXT',
     'ALTER TABLE items ADD COLUMN escalate INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE items ADD COLUMN command TEXT',
+    'ALTER TABLE items ADD COLUMN archived INTEGER NOT NULL DEFAULT 0',
   ]) {
     try { db.run(stmt) } catch {}
   }
@@ -93,8 +97,9 @@ export function openStore(dbPath?: string) {
       const ex = db.query<any, any>('SELECT id, status FROM items WHERE hash = ?').get(f.hash)
       if (ex) {
         const promote = ex.status === 'ignored' && f.score >= INVESTIGATE_THRESHOLD
+        // archived=0: a sense re-emitting the hash means the finding is back — retention must not hide a live problem
         db.run(
-          'UPDATE items SET updated=?, title=?, detail=?, score=?' + (promote ? ", status='queued', reason=NULL" : '') + ' WHERE id=?',
+          'UPDATE items SET updated=?, title=?, detail=?, score=?, archived=0' + (promote ? ", status='queued', reason=NULL" : '') + ' WHERE id=?',
           [now, f.title, f.detail, f.score, ex.id],
         )
         return 'existing'
@@ -115,7 +120,7 @@ export function openStore(dbPath?: string) {
     },
 
     items(limit = 200): Item[] {
-      return db.query<Item, any>('SELECT * FROM items ORDER BY updated DESC LIMIT ?').all(limit)
+      return db.query<Item, any>('SELECT * FROM items WHERE archived=0 ORDER BY updated DESC LIMIT ?').all(limit)
     },
 
     byId(id: number): Item | null {
@@ -124,8 +129,22 @@ export function openStore(dbPath?: string) {
 
     queued(limit: number): Item[] {
       return db
-        .query<Item, any>("SELECT * FROM items WHERE status='queued' ORDER BY score DESC, updated DESC LIMIT ?")
+        .query<Item, any>("SELECT * FROM items WHERE status='queued' AND archived=0 ORDER BY score DESC, updated DESC LIMIT ?")
         .all(limit)
+    },
+
+    /** Retention: hide items that settled into a terminal status more than `days` ago.
+     *  Rows are flagged, never deleted — the db stays the audit trail. days <= 0 disables. */
+    archiveOld(days: number): number {
+      if (!days || days <= 0) return 0
+      return db.run(
+        "UPDATE items SET archived=1 WHERE archived=0 AND status IN ('merged','closed','dismissed','failed','ignored') AND updated < ?",
+        [Date.now() - days * 86_400_000],
+      ).changes
+    },
+
+    archivedCount(): number {
+      return db.query<any, any>('SELECT COUNT(*) AS n FROM items WHERE archived=1').get()?.n ?? 0
     },
 
     metaGet(key: string): string | null {

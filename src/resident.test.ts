@@ -215,6 +215,69 @@ describe('store', () => {
   })
 })
 
+// ---------------------------------------------------------------- retention / archiveOld
+describe('archiveOld', () => {
+  const DAY = 86_400_000
+  // a settled item whose last touch was `ageDays` ago (update bypasses store.update, which stamps `updated` with now)
+  const seed = (s: ReturnType<typeof openStore>, hash: string, status: string, ageDays: number) => {
+    s.upsertFinding({ hash, sense: 'git', repo: 'r', kind: 'k', title: hash, detail: '', score: 60, status: status as any })
+    s.db.run('UPDATE items SET updated=? WHERE hash=?', [Date.now() - ageDays * DAY, hash])
+  }
+  test('archives terminal items past the cutoff and returns the count', () => {
+    const s = openStore(':memory:')
+    for (const st of ['merged', 'closed', 'dismissed', 'failed', 'ignored']) seed(s, st, st, 31)
+    expect(s.archiveOld(30)).toBe(5)
+    expect(s.items(10)).toEqual([])
+    expect(s.archivedCount()).toBe(5)
+  })
+  test('age boundary: younger-than-N stays, older-than-N goes', () => {
+    const s = openStore(':memory:')
+    seed(s, 'young', 'dismissed', 29)
+    seed(s, 'old', 'dismissed', 31)
+    expect(s.archiveOld(30)).toBe(1)
+    const left = s.items(10)
+    expect(left.length).toBe(1)
+    expect(left[0].hash).toBe('young')
+  })
+  test('live statuses never archive, however old', () => {
+    const s = openStore(':memory:')
+    for (const st of ['queued', 'investigating', 'ready', 'approving', 'approved', 'working', 'tracked']) seed(s, st, st, 365)
+    expect(s.archiveOld(30)).toBe(0)
+    expect(s.items(10).length).toBe(7)
+  })
+  test('0 or negative days disables retention', () => {
+    const s = openStore(':memory:')
+    seed(s, 'old', 'merged', 365)
+    expect(s.archiveOld(0)).toBe(0)
+    expect(s.archiveOld(-5)).toBe(0)
+    expect(s.items(10).length).toBe(1)
+  })
+  test('idempotent — the second pass finds nothing left', () => {
+    const s = openStore(':memory:')
+    seed(s, 'old', 'closed', 31)
+    expect(s.archiveOld(30)).toBe(1)
+    expect(s.archiveOld(30)).toBe(0)
+    expect(s.archivedCount()).toBe(1)
+  })
+  test('items() and queued() hide archived rows; byId still sees them (audit)', () => {
+    const s = openStore(':memory:')
+    seed(s, 'q', 'queued', 1)
+    const id = s.items(10)[0].id
+    s.db.run('UPDATE items SET archived=1 WHERE id=?', [id])
+    expect(s.items(10)).toEqual([])
+    expect(s.queued(10)).toEqual([])
+    expect(s.byId(id)?.archived).toBe(1)
+  })
+  test('a returning finding un-archives its row — retention must not hide a live problem', () => {
+    const s = openStore(':memory:')
+    seed(s, 'h', 'ignored', 31)
+    expect(s.archiveOld(30)).toBe(1)
+    s.upsertFinding({ hash: 'h', sense: 'git', repo: 'r', kind: 'k', title: 'h', detail: '', score: 60, status: 'queued' })
+    expect(s.items(10).length).toBe(1)
+    expect(s.items(10)[0].status).toBe('queued') // ignored→queued promotion still applies on the way back
+  })
+})
+
 // ---------------------------------------------------------------- log rotation
 describe('fileLogger', () => {
   const tmpLog = () => join(mkdtempSync(join(tmpdir(), 'resident-log-')), 'resident.log')

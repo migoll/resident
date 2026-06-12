@@ -132,6 +132,7 @@ ${B}resident status${R}
   tracked     ${by('tracked')} ${D}(issue open)${R}
   ignored     ${by('ignored')} ${D}(below threshold)${R}
   dismissed   ${by('dismissed')}
+  archived    ${store.archivedCount()} ${D}(retention — kept in the db)${R}
   today       ${store.usedToday()} investigations · $${store.costToday().toFixed(2)}
 `)
     break
