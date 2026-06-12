@@ -28,11 +28,14 @@ git clone https://github.com/migoll/resident && cd resident
 printf '#!/bin/sh\nexec bun %s/src/cli.ts "$@"\n' "$PWD" > ~/.bun/bin/resident && chmod +x ~/.bun/bin/resident
 
 resident init    # discovers your repos → ~/.resident/config.json
+resident doctor  # check the setup: tools, auth, config, folder access, daemon
 resident once    # one foreground cycle — see what it finds right now
 resident start   # the daemon: cycles forever + inbox UI on :5117
 resident open    # open the inbox (--app for a chromeless desktop window)
 resident install # or: run permanently via launchd — starts at login, restarts if killed
 ```
+
+If anything misbehaves, `resident doctor` checks every dependency — bun/git/claude/gh auth, config, repo folder access (the macOS TCC trap), the db, the daemon, Sentry token, notify URL — and prints a fix hint per failure (exit 1 if something's truly broken).
 
 Config lives in `~/.resident/config.json`: repos, watched URLs, cycle interval, budgets, and optional `"notify"` — point it at an [ntfy](https://ntfy.sh) topic URL or a Slack incoming webhook and Resident pings your phone when something's ready for you, when a PR opens, or when a site goes down. State in `~/.resident/resident.db`, investigation transcripts in `~/.resident/runs/`. The watchlist is also editable from the inbox itself (the chips row).
 

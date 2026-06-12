@@ -6,6 +6,7 @@ import { openStore } from './store'
 import { cycle, startLoop, type DaemonState } from './daemon'
 import { startServer } from './server'
 import { teeToFile } from './hygiene'
+import { runDoctor } from './doctor'
 
 const B = '\x1b[1m', D = '\x1b[2m', C = '\x1b[36m', G = '\x1b[32m', Y = '\x1b[33m', R = '\x1b[0m'
 const ts = () => new Date().toTimeString().slice(0, 8)
@@ -24,6 +25,7 @@ ${B}usage${R}
   resident uninstall     remove the launchd service
   resident stop          stop the daemon however it's running
   resident status        what it knows right now
+  resident doctor        check the setup: tools, auth, config, folder access, db, daemon
   resident open          open the inbox (--app for a chromeless window)
 
 ${B}how it behaves${R}
@@ -136,6 +138,10 @@ ${B}resident status${R}
   today       ${store.usedToday()} investigations · $${store.costToday().toFixed(2)}
 `)
     break
+  }
+
+  case 'doctor': {
+    process.exit(await runDoctor())
   }
 
   case 'open': {

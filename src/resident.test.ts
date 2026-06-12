@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { commandAllowed, investigationModel, applyModel, type Config, type RepoCfg } from './config'
+import { formatCheck, exitCode, type Check } from './doctor'
 import { estimateCost, extractCommand, branchFor } from './hands'
 import { fileLogger } from './hygiene'
 import { scoreSentryIssue } from './senses'
@@ -328,5 +329,33 @@ describe('fileLogger', () => {
     log.write('into the void')
     log.maybeRotate()
     log.write('still alive')
+  })
+})
+
+// ---------------------------------------------------------------- doctor (pure parts)
+describe('doctor', () => {
+  const c = (verdict: Check['verdict'], hint?: string): Check => ({ name: 'git', verdict, detail: 'd', hint })
+  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '')
+
+  test('exit 1 only on ✗ — warnings and informationals pass', () => {
+    expect(exitCode([c('ok'), c('warn'), c('info')])).toBe(0)
+    expect(exitCode([c('ok'), c('fail')])).toBe(1)
+    expect(exitCode([])).toBe(0)
+  })
+  test('each verdict renders its glyph', () => {
+    expect(strip(formatCheck(c('ok'), 6))).toStartWith('  ✓ ')
+    expect(strip(formatCheck(c('warn'), 6))).toStartWith('  ⚠ ')
+    expect(strip(formatCheck(c('fail'), 6))).toStartWith('  ✗ ')
+    expect(strip(formatCheck(c('info'), 6))).toStartWith('  − ')
+  })
+  test('details align on the pad width', () => {
+    expect(strip(formatCheck(c('ok'), 10))).toBe('  ✓ git       d')
+  })
+  test('hints land on their own dim line, aligned under the detail', () => {
+    const out = strip(formatCheck(c('fail', 'gh auth login'), 10))
+    const [line, hint] = out.split('\n')
+    expect(hint).toBe(`${' '.repeat(14)}↳ gh auth login`)
+    expect(line.indexOf('d')).toBe(hint.indexOf('↳'))
+    expect(strip(formatCheck(c('ok'), 10))).not.toContain('\n')
   })
 })
