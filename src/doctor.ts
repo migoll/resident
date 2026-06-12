@@ -77,9 +77,13 @@ function checkDb(): Check {
     const v = String(Date.now())
     s.metaSet('doctor:ping', v)
     const back = s.metaGet('doctor:ping')
+    s.db.run("DELETE FROM meta WHERE key='doctor:ping'") // leave no diagnostic residue behind
     s.db.close()
     return back === v ? ok('db', 'read/write ok') : fail('db', 'write/read roundtrip mismatch', `inspect ${join(HOME, 'resident.db')}`)
   } catch (e) {
+    // busy ≠ broken: the daemon may simply hold the write lock right now (rare even with the
+    // 2s busy_timeout in openStore, but the doctor is exactly the tool people run mid-incident)
+    if (/SQLITE_BUSY|database is locked/i.test(String(e))) return warn('db', 'busy — the daemon is writing right now', 'fine; re-run doctor in a moment')
     return fail('db', `cannot open: ${String(e).slice(0, 60)}`, `check ${join(HOME, 'resident.db')} permissions`)
   }
 }

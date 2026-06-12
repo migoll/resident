@@ -50,6 +50,9 @@ export const INVESTIGATE_THRESHOLD = 55
 export function openStore(dbPath?: string) {
   if (!dbPath) mkdirSync(HOME, { recursive: true })
   const db = new Database(dbPath ?? join(HOME, 'resident.db'))
+  // a second connection (resident doctor, a future CLI) probing while the daemon is mid-write
+  // must wait briefly, not throw SQLITE_BUSY — a healthy db must never look broken
+  db.run('PRAGMA busy_timeout = 2000')
   db.run(`CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created INTEGER NOT NULL,
