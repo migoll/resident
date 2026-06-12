@@ -65,7 +65,7 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
       *(progress 06-10: `bun test` suite checked in — judgment logic (tiering/allowlist/extraction/
       cost-estimate) + store CRUD on `:memory:`; Actions workflow added. Remaining: senses/triage/
       watch-API coverage + the dogfood loop.)*
-- [ ] **Hygiene**: log rotation, archive items older than N days, `resident doctor`
+- [x] **Hygiene**: log rotation, archive items older than N days, `resident doctor`
       (checks bun/claude/gh/tailscale auth and folder access)
 
 ## Phase 2 — The moat (memory + earned autonomy)
@@ -158,3 +158,10 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   estimateCost knows fable ($1.50/min) and unknown models now fall back to the TOP rate;
   failed approves record their cost on the item; 29-test `bun test` suite checked in + GitHub
   Actions CI; README documents tiering + command allowlists.
+- 2026-06-13 — Phase 1 hygiene: the daemon now owns resident.log itself (tee + rotate past 5 MB,
+  one .1 generation — launchd's open fd made StandardOutPath unrotatable, so launchd keeps only
+  bun-level crash spew in launchd.log; re-run `resident install` to adopt the plist); settled
+  items (merged/closed/dismissed/failed/ignored) archive after `retentionDays` (default 30,
+  0 disables) — hidden from every view, kept in the db as the audit trail, un-archived if the
+  finding returns; `resident doctor` — 11 checks (tools, gh auth, config, TCC folder access, db
+  roundtrip, daemon, Sentry token, notify URL) with a dim fix-hint per failure, exit 1 only on ✗.
