@@ -5,6 +5,7 @@ import { loadConfig, saveConfig, discoverRepos, DEFAULTS, CONFIG_PATH, type Conf
 import { openStore } from './store'
 import { cycle, startLoop, type DaemonState } from './daemon'
 import { startServer } from './server'
+import { teeToFile } from './hygiene'
 
 const B = '\x1b[1m', D = '\x1b[2m', C = '\x1b[36m', G = '\x1b[32m', Y = '\x1b[33m', R = '\x1b[0m'
 const ts = () => new Date().toTimeString().slice(0, 8)
@@ -91,7 +92,9 @@ switch (cmd) {
     const state: DaemonState = { nextCycleAt: 0, cycling: false, lastCycle: null }
     if (values.port) process.env.PORT = values.port
     if (values.lan) cfg.bind = '0.0.0.0' // reachable from other devices (pair with Tailscale off home Wi-Fi)
-    const srv = startServer({ cfg, store, state, log, requestCycle: () => state.wake?.() })
+    // resident.log is written by US, not launchd — only an fd the daemon owns can be rotated
+    const tlog = teeToFile(log)
+    const srv = startServer({ cfg, store, state, log: tlog, requestCycle: () => state.wake?.() })
     if (values.lan) {
       const ip = Bun.spawnSync(['ipconfig', 'getifaddr', 'en0'], { stdout: 'pipe', stderr: 'pipe' }).stdout.toString().trim()
       console.log(`${Y}  ⚠ inbox bound to all interfaces — no auth; trust your network (or use Tailscale).${R}`)
@@ -112,7 +115,7 @@ ${B}resident${R} ${D}· awake. watching ${cfg.repos.length} repos and ${cfg.urls
   rhythm    ${D}every ${cfg.intervalMinutes} minutes · ${cfg.budgets.perCycle} investigations/cycle · ${cfg.budgets.perDay}/day${R}
   mode      ${D}shadow — read-only until you approve something${R}
 `)
-    await startLoop(cfg, store, state, log)
+    await startLoop(cfg, store, state, tlog)
     break
   }
 
@@ -163,6 +166,7 @@ ${B}resident status${R}
       if (p) dirs.add(p.replace(/\/[^/]+$/, ''))
     }
     const bunPath = Bun.which('bun') ?? 'bun'
+    // launchd only captures bun-level crash spew now — the daemon tees resident.log itself (an fd it owns can rotate)
     const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -174,8 +178,8 @@ ${B}resident status${R}
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${process.env.HOME}/.resident/resident.log</string>
-  <key>StandardErrorPath</key><string>${process.env.HOME}/.resident/resident.log</string>
+  <key>StandardOutPath</key><string>${process.env.HOME}/.resident/launchd.log</string>
+  <key>StandardErrorPath</key><string>${process.env.HOME}/.resident/launchd.log</string>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>${[...dirs].join(':')}</string>
     <key>HOME</key><string>${process.env.HOME}</string>
@@ -189,7 +193,8 @@ ${B}resident status${R}
     const r = Bun.spawnSync(['launchctl', 'bootstrap', `gui/${uid}`, plistPath], { stdout: 'pipe', stderr: 'pipe' })
     if (r.exitCode !== 0) Bun.spawnSync(['launchctl', 'load', '-w', plistPath], { stdout: 'pipe', stderr: 'pipe' })
     console.log(`${G}✓${R} installed — resident now runs permanently (starts at login, restarts if killed)`)
-    console.log(`${D}  logs: ~/.resident/resident.log · remove with: resident uninstall${R}`)
+    console.log(`${D}  logs: ~/.resident/resident.log (rotated at 5 MB) · bun-level crashes: ~/.resident/launchd.log${R}`)
+    console.log(`${D}  remove with: resident uninstall${R}`)
     break
   }
 

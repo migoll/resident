@@ -1,6 +1,10 @@
 import { describe, test, expect } from 'bun:test'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { commandAllowed, investigationModel, applyModel, type Config, type RepoCfg } from './config'
 import { estimateCost, extractCommand, branchFor } from './hands'
+import { fileLogger } from './hygiene'
 import { scoreSentryIssue } from './senses'
 import { openStore, INVESTIGATE_THRESHOLD } from './store'
 
@@ -208,5 +212,58 @@ describe('store', () => {
     expect(s.usedToday()).toBe(2)
     s.addCost(0.5); s.addCost(0.25)
     expect(s.costToday()).toBeCloseTo(0.75)
+  })
+})
+
+// ---------------------------------------------------------------- log rotation
+describe('fileLogger', () => {
+  const tmpLog = () => join(mkdtempSync(join(tmpdir(), 'resident-log-')), 'resident.log')
+  const STAMP = 20 // 'YYYY-MM-DD HH:MM:SS ' prefix on every line
+
+  test('writes lines with the ANSI stripped', () => {
+    const path = tmpLog()
+    const log = fileLogger(path, 1024)
+    log.write('\x1b[2m08:00:00\x1b[0m ◉ cycle started')
+    const body = readFileSync(path, 'utf8')
+    expect(body).toContain('◉ cycle started')
+    expect(body).not.toContain('\x1b')
+  })
+  test('threshold is strict — a file at exactly maxBytes stays put', () => {
+    const path = tmpLog()
+    const line = 'abc' // on disk: stamp + line + \n = STAMP + 4 bytes
+    const log = fileLogger(path, STAMP + line.length + 1)
+    log.write(line)
+    log.maybeRotate()
+    expect(existsSync(`${path}.1`)).toBe(false)
+    expect(readFileSync(path, 'utf8')).toContain('abc')
+  })
+  test('rotates past the threshold and keeps writing to a fresh file', () => {
+    const path = tmpLog()
+    const log = fileLogger(path, 64)
+    log.write('x'.repeat(80))
+    log.maybeRotate()
+    expect(readFileSync(`${path}.1`, 'utf8')).toContain('x'.repeat(80))
+    log.write('after-rotation')
+    const live = readFileSync(path, 'utf8')
+    expect(live).toContain('after-rotation')
+    expect(live).not.toContain('xxx')
+  })
+  test('keeps exactly one generation — the next rotation replaces .1', () => {
+    const path = tmpLog()
+    const log = fileLogger(path, 32)
+    log.write('first-' + 'a'.repeat(40))
+    log.maybeRotate()
+    log.write('second-' + 'b'.repeat(40))
+    log.maybeRotate()
+    const gen = readFileSync(`${path}.1`, 'utf8')
+    expect(gen).toContain('second-')
+    expect(gen).not.toContain('first-')
+    expect(readFileSync(path, 'utf8')).toBe('')
+  })
+  test('an unwritable path degrades to a no-op instead of throwing', () => {
+    const log = fileLogger('/dev/null/impossible/resident.log', 64)
+    log.write('into the void')
+    log.maybeRotate()
+    log.write('still alive')
   })
 })

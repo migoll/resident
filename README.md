@@ -54,7 +54,7 @@ resident init                          # then edit ~/.resident/config.json:
 resident install                       # permanent: starts at login, restarts if killed
 ```
 
-Notes for laptop-as-server: keep it on power and enable *Prevent automatic sleeping when display is off* (System Settings → Battery → Options) so it works with the lid closed. The inbox has no auth — on anything beyond your home network, put it behind [Tailscale](https://tailscale.com) and reach it via the tailnet IP from your phone anywhere.
+Notes for laptop-as-server: keep it on power and enable *Prevent automatic sleeping when display is off* (System Settings → Battery → Options) so it works with the lid closed. The inbox has no auth — on anything beyond your home network, put it behind [Tailscale](https://tailscale.com) and reach it via the tailnet IP from your phone anywhere. Logs: the daemon writes `~/.resident/resident.log` itself and rotates it past 5 MB (one `.1` generation kept); launchd captures only bun-level crash spew in `~/.resident/launchd.log`. Installs from before this split should re-run `resident install` once to adopt the new plist.
 
 ## The authority model
 
