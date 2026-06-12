@@ -1,6 +1,11 @@
 import { describe, test, expect } from 'bun:test'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { commandAllowed, investigationModel, applyModel, type Config, type RepoCfg } from './config'
+import { formatCheck, exitCode, type Check } from './doctor'
 import { estimateCost, extractCommand, branchFor } from './hands'
+import { fileLogger } from './hygiene'
 import { scoreSentryIssue } from './senses'
 import { openStore, INVESTIGATE_THRESHOLD } from './store'
 
@@ -208,5 +213,149 @@ describe('store', () => {
     expect(s.usedToday()).toBe(2)
     s.addCost(0.5); s.addCost(0.25)
     expect(s.costToday()).toBeCloseTo(0.75)
+  })
+})
+
+// ---------------------------------------------------------------- retention / archiveOld
+describe('archiveOld', () => {
+  const DAY = 86_400_000
+  // a settled item whose last touch was `ageDays` ago (update bypasses store.update, which stamps `updated` with now)
+  const seed = (s: ReturnType<typeof openStore>, hash: string, status: string, ageDays: number) => {
+    s.upsertFinding({ hash, sense: 'git', repo: 'r', kind: 'k', title: hash, detail: '', score: 60, status: status as any })
+    s.db.run('UPDATE items SET updated=? WHERE hash=?', [Date.now() - ageDays * DAY, hash])
+  }
+  test('archives terminal items past the cutoff and returns the count', () => {
+    const s = openStore(':memory:')
+    for (const st of ['merged', 'closed', 'dismissed', 'failed', 'ignored']) seed(s, st, st, 31)
+    expect(s.archiveOld(30)).toBe(5)
+    expect(s.items(10)).toEqual([])
+    expect(s.archivedCount()).toBe(5)
+  })
+  test('age boundary: younger-than-N stays, older-than-N goes', () => {
+    const s = openStore(':memory:')
+    seed(s, 'young', 'dismissed', 29)
+    seed(s, 'old', 'dismissed', 31)
+    expect(s.archiveOld(30)).toBe(1)
+    const left = s.items(10)
+    expect(left.length).toBe(1)
+    expect(left[0].hash).toBe('young')
+  })
+  test('live statuses never archive, however old', () => {
+    const s = openStore(':memory:')
+    for (const st of ['queued', 'investigating', 'ready', 'approving', 'approved', 'working', 'tracked']) seed(s, st, st, 365)
+    expect(s.archiveOld(30)).toBe(0)
+    expect(s.items(10).length).toBe(7)
+  })
+  test('0 or negative days disables retention', () => {
+    const s = openStore(':memory:')
+    seed(s, 'old', 'merged', 365)
+    expect(s.archiveOld(0)).toBe(0)
+    expect(s.archiveOld(-5)).toBe(0)
+    expect(s.items(10).length).toBe(1)
+  })
+  test('idempotent — the second pass finds nothing left', () => {
+    const s = openStore(':memory:')
+    seed(s, 'old', 'closed', 31)
+    expect(s.archiveOld(30)).toBe(1)
+    expect(s.archiveOld(30)).toBe(0)
+    expect(s.archivedCount()).toBe(1)
+  })
+  test('items() and queued() hide archived rows; byId still sees them (audit)', () => {
+    const s = openStore(':memory:')
+    seed(s, 'q', 'queued', 1)
+    const id = s.items(10)[0].id
+    s.db.run('UPDATE items SET archived=1 WHERE id=?', [id])
+    expect(s.items(10)).toEqual([])
+    expect(s.queued(10)).toEqual([])
+    expect(s.byId(id)?.archived).toBe(1)
+  })
+  test('a returning finding un-archives its row — retention must not hide a live problem', () => {
+    const s = openStore(':memory:')
+    seed(s, 'h', 'ignored', 31)
+    expect(s.archiveOld(30)).toBe(1)
+    s.upsertFinding({ hash: 'h', sense: 'git', repo: 'r', kind: 'k', title: 'h', detail: '', score: 60, status: 'queued' })
+    expect(s.items(10).length).toBe(1)
+    expect(s.items(10)[0].status).toBe('queued') // ignored→queued promotion still applies on the way back
+  })
+})
+
+// ---------------------------------------------------------------- log rotation
+describe('fileLogger', () => {
+  const tmpLog = () => join(mkdtempSync(join(tmpdir(), 'resident-log-')), 'resident.log')
+  const STAMP = 20 // 'YYYY-MM-DD HH:MM:SS ' prefix on every line
+
+  test('writes lines with the ANSI stripped', () => {
+    const path = tmpLog()
+    const log = fileLogger(path, 1024)
+    log.write('\x1b[2m08:00:00\x1b[0m ◉ cycle started')
+    const body = readFileSync(path, 'utf8')
+    expect(body).toContain('◉ cycle started')
+    expect(body).not.toContain('\x1b')
+  })
+  test('threshold is strict — a file at exactly maxBytes stays put', () => {
+    const path = tmpLog()
+    const line = 'abc' // on disk: stamp + line + \n = STAMP + 4 bytes
+    const log = fileLogger(path, STAMP + line.length + 1)
+    log.write(line)
+    log.maybeRotate()
+    expect(existsSync(`${path}.1`)).toBe(false)
+    expect(readFileSync(path, 'utf8')).toContain('abc')
+  })
+  test('rotates past the threshold and keeps writing to a fresh file', () => {
+    const path = tmpLog()
+    const log = fileLogger(path, 64)
+    log.write('x'.repeat(80))
+    log.maybeRotate()
+    expect(readFileSync(`${path}.1`, 'utf8')).toContain('x'.repeat(80))
+    log.write('after-rotation')
+    const live = readFileSync(path, 'utf8')
+    expect(live).toContain('after-rotation')
+    expect(live).not.toContain('xxx')
+  })
+  test('keeps exactly one generation — the next rotation replaces .1', () => {
+    const path = tmpLog()
+    const log = fileLogger(path, 32)
+    log.write('first-' + 'a'.repeat(40))
+    log.maybeRotate()
+    log.write('second-' + 'b'.repeat(40))
+    log.maybeRotate()
+    const gen = readFileSync(`${path}.1`, 'utf8')
+    expect(gen).toContain('second-')
+    expect(gen).not.toContain('first-')
+    expect(readFileSync(path, 'utf8')).toBe('')
+  })
+  test('an unwritable path degrades to a no-op instead of throwing', () => {
+    const log = fileLogger('/dev/null/impossible/resident.log', 64)
+    log.write('into the void')
+    log.maybeRotate()
+    log.write('still alive')
+  })
+})
+
+// ---------------------------------------------------------------- doctor (pure parts)
+describe('doctor', () => {
+  const c = (verdict: Check['verdict'], hint?: string): Check => ({ name: 'git', verdict, detail: 'd', hint })
+  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '')
+
+  test('exit 1 only on ✗ — warnings and informationals pass', () => {
+    expect(exitCode([c('ok'), c('warn'), c('info')])).toBe(0)
+    expect(exitCode([c('ok'), c('fail')])).toBe(1)
+    expect(exitCode([])).toBe(0)
+  })
+  test('each verdict renders its glyph', () => {
+    expect(strip(formatCheck(c('ok'), 6))).toStartWith('  ✓ ')
+    expect(strip(formatCheck(c('warn'), 6))).toStartWith('  ⚠ ')
+    expect(strip(formatCheck(c('fail'), 6))).toStartWith('  ✗ ')
+    expect(strip(formatCheck(c('info'), 6))).toStartWith('  − ')
+  })
+  test('details align on the pad width', () => {
+    expect(strip(formatCheck(c('ok'), 10))).toBe('  ✓ git       d')
+  })
+  test('hints land on their own dim line, aligned under the detail', () => {
+    const out = strip(formatCheck(c('fail', 'gh auth login'), 10))
+    const [line, hint] = out.split('\n')
+    expect(hint).toBe(`${' '.repeat(14)}↳ gh auth login`)
+    expect(line.indexOf('d')).toBe(hint.indexOf('↳'))
+    expect(strip(formatCheck(c('ok'), 10))).not.toContain('\n')
   })
 })

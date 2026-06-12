@@ -28,6 +28,9 @@ export interface SentryCfg {
 export interface Config {
   intervalMinutes: number
   budgets: { perCycle: number; perDay: number }
+  /** archive merged/closed/dismissed/failed/ignored items untouched for this many days —
+   *  hidden from the inbox, kept in the db (default 30; 0 or negative keeps everything) */
+  retentionDays?: number
   /** error monitoring — the 2am-prod-error signal */
   sentry?: SentryCfg
   /** @deprecated legacy pin: if set, forces EVERY investigation onto this model (disables tiering). Prefer `models`. */
