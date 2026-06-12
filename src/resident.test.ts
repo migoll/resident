@@ -248,12 +248,14 @@ describe('dismissals teach', () => {
     expect(s.mutes()).toHaveLength(1)
     expect(s.mutes()[0].source).toBe('manual')
   })
-  test('a muted kind is never promoted back to queued by a high score', () => {
+  test('a muted kind is never promoted back to queued by a high score — and its reason stays honest', () => {
     const s = openStore(':memory:')
-    const f = { hash: 'h', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 20, status: 'ignored' as const }
+    const f = { hash: 'h', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 20, status: 'ignored' as const, reason: 'below threshold (score 20)' }
     s.upsertFinding(f)
-    s.upsertFinding({ ...f, score: 90 }, true)
-    expect(s.items(10)[0].status).toBe('ignored')
+    s.upsertFinding({ ...f, score: 90, reason: 'muted — you dismissed this' }, true)
+    const it = s.items(10)[0]
+    expect(it.status).toBe('ignored')
+    expect(it.reason).toBe('muted — you dismissed this') // not the stale "below threshold" lie
   })
 })
 

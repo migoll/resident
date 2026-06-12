@@ -139,10 +139,13 @@ export function openStore(dbPath?: string) {
         // archived=0: a sense re-emitting the hash means the finding is back — retention must not hide a live problem
         // a muted kind never earns its way back to queued on score alone — that's what unmute is for
         const promote = !muted && ex.status === 'ignored' && f.score >= INVESTIGATE_THRESHOLD
-        db.run(
-          'UPDATE items SET updated=?, title=?, detail=?, score=?, archived=0' + (promote ? ", status='queued', reason=NULL" : '') + ' WHERE id=?',
-          [now, f.title, f.detail, f.score, ex.id],
-        )
+        const sets = ['updated=?', 'title=?', 'detail=?', 'score=?', 'archived=0']
+        const params: any[] = [now, f.title, f.detail, f.score]
+        if (promote) sets.push("status='queued'", 'reason=NULL')
+        // keep a muted item's stated reason honest — "below threshold" would be a lie once the
+        // score rises and only the mute is holding it down
+        else if (muted && ex.status === 'ignored') { sets.push('reason=?'); params.push(f.reason ?? null) }
+        db.run(`UPDATE items SET ${sets.join(', ')} WHERE id=?`, [...params, ex.id])
         return 'existing'
       }
       db.run(
