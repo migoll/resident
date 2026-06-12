@@ -52,6 +52,21 @@ function extractDiff(text: string): string | null {
   return m ? m[1].trimEnd() : null
 }
 
+/** Pull durable write-back notes out of an investigation's NOTES FOR NEXT TIME section.
+ *  Strict: only bullet/numbered lines count (prose and "none" are not memories), 3 max,
+ *  each clipped — memory is injected into every future dig, so it must stay terse. */
+export function extractNotes(text: string): string[] {
+  const m = text.match(/## NOTES FOR NEXT TIME\s*\n([\s\S]*?)(?=\n## |$)/)
+  if (!m) return []
+  return m[1]
+    .split('\n')
+    .filter((l) => /^\s*(?:[-*•]|\d+\.)\s+/.test(l))
+    .map((l) => l.replace(/^\s*(?:[-*•]|\d+\.)\s+/, '').trim())
+    .filter((l) => l && !/^none\.?$/i.test(l))
+    .slice(0, 3)
+    .map((l) => l.slice(0, 300))
+}
+
 /** Exported for tests. */
 export function extractCommand(text: string): string | null {
   const m = text.match(/```(?:sh|bash|shell)\n([\s\S]*?)```/)
@@ -89,15 +104,33 @@ export function branchFor(item: Pick<Item, 'id' | 'title'>) {
   return `resident/${item.id}-${slug}`
 }
 
+/** What the dig is told about prior work on this repo. Newest notes first, hard char cap —
+ *  memory rides along on EVERY investigation, so it pays prompt cost every time. */
+function memoryBlock(memories: string[], cap = 2500): string {
+  if (!memories.length) return ''
+  const lines: string[] = []
+  let used = 0
+  for (const m of memories) {
+    if (used + m.length > cap) break
+    lines.push(`- ${m}`)
+    used += m.length
+  }
+  if (!lines.length) return ''
+  return `
+DURABLE NOTES from prior work on this repo (written by earlier investigations and the human — trust them; they encode conventions, known false positives, and approaches that already failed):
+${lines.join('\n')}
+`
+}
+
 /** Shadow-mode investigation: read-only dig, returns evidence + proposed patch. */
-export async function investigate(item: Item, repoPath: string, model?: string) {
+export async function investigate(item: Item, repoPath: string, model?: string, memories: string[] = []) {
   const prompt = `You are Resident, an always-on codebase custodian. You are investigating ONE finding in this repository, strictly read-only.
 
 FINDING: ${item.title}
 KIND: ${item.sense}/${item.kind}
 DETAIL:
 ${item.detail || '(none)'}
-
+${memoryBlock(memories)}
 Investigate the real situation in this codebase (read files, git history, gh, etc). Then respond with EXACTLY this structure:
 
 ## ROOT CAUSE
@@ -116,13 +149,17 @@ Prefer the diff for anything you can hand-edit correctly; reach for a command on
 ## RISK
 One line: low/medium/high and why.
 
+## NOTES FOR NEXT TIME
+0–3 bullets, or the single word "none". ONLY durable repo-level lessons a future investigation should know before digging: conventions you discovered, false-positive patterns ("X always flags but is intentional because Y"), approaches that don't work here. NEVER a summary of this finding, never secrets or tokens.
+
 Be concrete and honest. If the finding is stale or a false positive, say so under ROOT CAUSE and propose NONE.`
 
   const res = await runClaude(prompt, repoPath, READONLY_TOOLS, model)
   saveTranscript(item.id, 'investigate', res.text)
   const patch = extractDiff(res.text)
-  // a command-fix is only honoured when no diff was proposed (diffs are the constrained default)
-  return { ok: res.ok, evidence: res.text, patch, command: patch ? null : extractCommand(res.text), cost: res.cost, costEstimated: res.costEstimated }
+  // a command-fix is only honoured when no diff was proposed (diffs are the constrained default);
+  // notes are only honoured from a CLEAN run — a crashed dig doesn't get to write memory
+  return { ok: res.ok, evidence: res.text, patch, command: patch ? null : extractCommand(res.text), notes: res.ok ? extractNotes(res.text) : [], cost: res.cost, costEstimated: res.costEstimated }
 }
 
 /** Human clicked Approve: apply the proposed fix on a branch and open a PR.

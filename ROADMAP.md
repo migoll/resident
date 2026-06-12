@@ -70,7 +70,7 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
 
 ## Phase 2 — The moat (memory + earned autonomy)
 
-- [ ] **Memory layer** (the compounding asset): per-repo durable notes — decisions, known
+- [x] **Memory layer** (the compounding asset): per-repo durable notes — decisions, known
       false-positives, conventions, "tried X, failed because Y". Investigations read memory
       before digging and write back after. Surfaced + editable in the inbox.
 - [ ] **Dismissals teach**: repeated dismissal of a kind/repo dampens its score automatically
@@ -158,3 +158,7 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   estimateCost knows fable ($1.50/min) and unknown models now fall back to the TOP rate;
   failed approves record their cost on the item; 29-test `bun test` suite checked in + GitHub
   Actions CI; README documents tiering + command allowlists.
+- 2026-06-13 — Phase 2 opens: the memory layer. Per-repo durable notes (memories table, 40/repo
+  cap, text-deduped) — every dig is handed them first (~2.5k char budget, newest first) and a
+  NOTES FOR NEXT TIME contract writes back 0–3 durable lessons from clean runs only. Surfaced +
+  editable in the inbox (Memory section; human edits take ownership); /api/memory endpoints.

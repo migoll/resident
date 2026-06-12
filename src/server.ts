@@ -72,7 +72,34 @@ export function startServer(deps: {
           items: store.items(150).map((it) =>
             it.command ? { ...it, commandAllowed: commandAllowed(cfg.repos.find((r) => r.name === it.repo), it.command) } : it,
           ),
+          memories: store.memories(),
         })
+      }
+
+      // durable per-repo notes: add {repo, note} · edit /api/memory/:id {note} · /api/memory/:id/delete
+      if (url.pathname === '/api/memory' && req.method === 'POST') {
+        let body: any
+        try { body = await req.json() } catch { return Response.json({ ok: false, error: 'bad json' }, { status: 400 }) }
+        const repo = String(body.repo ?? '').trim()
+        const note = String(body.note ?? '').trim()
+        if (!cfg.repos.some((r) => r.name === repo)) return Response.json({ ok: false, error: 'unknown repo' }, { status: 400 })
+        if (!note) return Response.json({ ok: false, error: 'empty note' }, { status: 400 })
+        store.addMemory(repo, note, 'human')
+        return Response.json({ ok: true })
+      }
+      const mem = url.pathname.match(/^\/api\/memory\/(\d+)(\/delete)?$/)
+      if (mem && req.method === 'POST') {
+        const id = Number(mem[1])
+        if (mem[2]) {
+          store.deleteMemory(id)
+          return Response.json({ ok: true })
+        }
+        let body: any
+        try { body = await req.json() } catch { return Response.json({ ok: false, error: 'bad json' }, { status: 400 }) }
+        const note = String(body.note ?? '').trim()
+        if (!note) return Response.json({ ok: false, error: 'empty note' }, { status: 400 })
+        store.updateMemory(id, note)
+        return Response.json({ ok: true })
       }
 
       if (url.pathname === '/api/cycle' && req.method === 'POST') {

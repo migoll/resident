@@ -62,7 +62,7 @@ Everything autonomous is **read-only by design** — the investigation toolset c
 
 ## Honest status
 
-This is a young v0.2 — a working single-user local daemon, born 2026-06-09, with one merged PR to its name on day one. The senses are pull-based polling; the killer ambient senses (Sentry, Slack, analytics, CVE feeds via webhooks) aren't built yet. There's no compounding memory layer yet. It runs while your machine is awake; the hosted always-on residence is the end-state. Treat it as a sharp prototype of an inverted workflow, not a finished product.
+This is a young v0.2 — a working single-user local daemon, born 2026-06-09, with one merged PR to its name on day one. The senses are pull-based polling; the webhook senses (Slack, analytics, CVE feeds) aren't built yet. The memory layer is brand new: per-repo durable notes that every investigation reads before digging and writes back after, editable in the inbox. It runs while your machine is awake; the hosted always-on residence is the end-state. Treat it as a sharp prototype of an inverted workflow, not a finished product.
 
 ## License
 

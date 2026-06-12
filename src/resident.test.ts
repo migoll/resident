@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'bun:test'
 import { commandAllowed, investigationModel, applyModel, type Config, type RepoCfg } from './config'
-import { estimateCost, extractCommand, branchFor } from './hands'
+import { estimateCost, extractCommand, extractNotes, branchFor } from './hands'
 import { scoreSentryIssue } from './senses'
-import { openStore, INVESTIGATE_THRESHOLD } from './store'
+import { openStore, INVESTIGATE_THRESHOLD, MEMORY_CAP } from './store'
 
 const CFG: Config = { intervalMinutes: 15, budgets: { perCycle: 2, perDay: 10 }, urls: [], repos: [] }
 const REPO: RepoCfg = { path: '/x', name: 'r', commands: ['bun update', 'bun install', 'bun add'] }
@@ -208,5 +208,71 @@ describe('store', () => {
     expect(s.usedToday()).toBe(2)
     s.addCost(0.5); s.addCost(0.25)
     expect(s.costToday()).toBeCloseTo(0.75)
+  })
+})
+
+// ---------------------------------------------------------------- memory (the compounding asset)
+describe('memory store', () => {
+  test('add, newest-first read, repo filtering', () => {
+    const s = openStore(':memory:')
+    s.addMemory('r1', 'older note', 'investigation')
+    s.addMemory('r1', 'newer note', 'human')
+    s.addMemory('r2', 'other repo', 'investigation')
+    expect(s.memories('r1').map((m) => m.note)).toEqual(['newer note', 'older note'])
+    expect(s.memories().length).toBe(3)
+  })
+  test('dedupes on normalized text and keeps one copy', () => {
+    const s = openStore(':memory:')
+    expect(s.addMemory('r', 'Lockfile  diffs are  intentional', 'investigation')).toBe('new')
+    expect(s.addMemory('r', 'lockfile diffs are intentional', 'human')).toBe('duplicate')
+    expect(s.memories('r').length).toBe(1)
+  })
+  test('caps per-repo memory at MEMORY_CAP by pruning the oldest', () => {
+    const s = openStore(':memory:')
+    for (let i = 0; i < MEMORY_CAP + 5; i++) s.addMemory('r', 'note ' + i, 'investigation')
+    const notes = s.memories('r')
+    expect(notes.length).toBe(MEMORY_CAP)
+    expect(notes.some((m) => m.note === 'note 0')).toBe(false)
+    expect(notes[0].note).toBe('note ' + (MEMORY_CAP + 4))
+  })
+  test('edit takes human ownership; empty edits are ignored; delete forgets', () => {
+    const s = openStore(':memory:')
+    s.addMemory('r', 'draft', 'investigation')
+    const id = s.memories('r')[0].id
+    s.updateMemory(id, '  polished  ')
+    expect(s.memories('r')[0].note).toBe('polished')
+    expect(s.memories('r')[0].source).toBe('human')
+    s.updateMemory(id, '   ')
+    expect(s.memories('r')[0].note).toBe('polished')
+    s.deleteMemory(id)
+    expect(s.memories('r').length).toBe(0)
+  })
+  test('blank notes and repo-less notes are refused', () => {
+    const s = openStore(':memory:')
+    expect(s.addMemory('r', '   ', 'human')).toBe('duplicate')
+    expect(s.addMemory('', 'note', 'human')).toBe('duplicate')
+    expect(s.memories().length).toBe(0)
+  })
+})
+
+describe('extractNotes', () => {
+  test('parses bullet and numbered lines, strips markers', () => {
+    const t = '## RISK\nlow\n\n## NOTES FOR NEXT TIME\n- uses bun, never npm\n* lockfile diffs are intentional\n2. CI must stay green\n'
+    expect(extractNotes(t)).toEqual(['uses bun, never npm', 'lockfile diffs are intentional', 'CI must stay green'])
+  })
+  test('caps at 3 notes', () => {
+    expect(extractNotes('## NOTES FOR NEXT TIME\n- a\n- b\n- c\n- d')).toEqual(['a', 'b', 'c'])
+  })
+  test('clips overlong notes — memory rides on every future dig', () => {
+    expect(extractNotes('## NOTES FOR NEXT TIME\n- ' + 'x'.repeat(400))[0].length).toBe(300)
+  })
+  test('"none", prose lines, and a missing section yield nothing', () => {
+    expect(extractNotes('## NOTES FOR NEXT TIME\nnone')).toEqual([])
+    expect(extractNotes('## NOTES FOR NEXT TIME\n- none')).toEqual([])
+    expect(extractNotes('## NOTES FOR NEXT TIME\nThis repo is interesting.')).toEqual([])
+    expect(extractNotes('## ROOT CAUSE\nwhatever')).toEqual([])
+  })
+  test('stops at the next section header', () => {
+    expect(extractNotes('## NOTES FOR NEXT TIME\n- keep\n## EXTRA\n- not this')).toEqual(['keep'])
   })
 })

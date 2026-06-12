@@ -42,7 +42,20 @@ export interface Item {
   escalate: number
 }
 
+export interface Memory {
+  id: number
+  created: number
+  updated: number
+  repo: string
+  /** who wrote it: an investigation write-back, or the human editing in the inbox */
+  source: 'investigation' | 'human'
+  note: string
+}
+
 export const INVESTIGATE_THRESHOLD = 55
+
+/** Per-repo memory cap — memory must stay small enough to inject into every dig. */
+export const MEMORY_CAP = 40
 
 /** Open the item store. `dbPath` exists for tests (`:memory:`); production always uses the default. */
 export function openStore(dbPath?: string) {
@@ -70,6 +83,14 @@ export function openStore(dbPath?: string) {
     command TEXT
   )`)
   db.run(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
+  db.run(`CREATE TABLE IF NOT EXISTS memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created INTEGER NOT NULL,
+    updated INTEGER NOT NULL,
+    repo TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'investigation',
+    note TEXT NOT NULL
+  )`)
 
   // migrations for DBs created before these columns existed (no-op on fresh DBs — duplicate-column throws and is swallowed)
   for (const stmt of [
@@ -147,6 +168,44 @@ export function openStore(dbPath?: string) {
     },
     addCost(c: number) {
       store.metaSet('cost:' + dayKey(), String(store.costToday() + c))
+    },
+
+    /** Durable per-repo notes, newest first (the order they're injected into digs). */
+    memories(repo?: string): Memory[] {
+      return repo
+        ? db.query<Memory, any>('SELECT * FROM memories WHERE repo=? ORDER BY updated DESC, id DESC').all(repo)
+        : db.query<Memory, any>('SELECT * FROM memories ORDER BY repo ASC, updated DESC, id DESC').all()
+    },
+
+    /** Write a durable note (deduped on normalized text — a re-learned lesson refreshes
+     *  the existing note instead of duplicating it, which also shields it from pruning). */
+    addMemory(repo: string, note: string, source: Memory['source']): 'new' | 'duplicate' {
+      const text = note.trim().slice(0, 500)
+      if (!text || !repo) return 'duplicate'
+      const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
+      const now = Date.now()
+      const ex = db.query<any, any>('SELECT id, note FROM memories WHERE repo=?').all(repo).find((m) => norm(m.note) === norm(text))
+      if (ex) {
+        db.run('UPDATE memories SET updated=? WHERE id=?', [now, ex.id])
+        return 'duplicate'
+      }
+      db.run('INSERT INTO memories (created, updated, repo, source, note) VALUES (?,?,?,?,?)', [now, now, repo, source, text])
+      db.run(
+        'DELETE FROM memories WHERE repo=? AND id NOT IN (SELECT id FROM memories WHERE repo=? ORDER BY updated DESC, id DESC LIMIT ?)',
+        [repo, repo, MEMORY_CAP],
+      )
+      return 'new'
+    },
+
+    /** Human edited a note in the inbox — it's theirs now, whoever first wrote it. */
+    updateMemory(id: number, note: string) {
+      const text = note.trim().slice(0, 500)
+      if (!text) return
+      db.run("UPDATE memories SET note=?, source='human', updated=? WHERE id=?", [text, Date.now(), id])
+    },
+
+    deleteMemory(id: number) {
+      db.run('DELETE FROM memories WHERE id=?', [id])
     },
   }
   return store

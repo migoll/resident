@@ -157,6 +157,17 @@
   }
   .mini:hover { color: var(--text); background: rgba(118, 118, 128, 0.34); }
 
+  details.mem { margin: 0 0 8px; }
+  details.mem summary { padding: 4px 6px; }
+  .mrow { display: flex; align-items: baseline; gap: 8px; padding: 7px 6px 7px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); font-size: 12.5px; }
+  .mrow .mnote { color: var(--text); }
+  .mrow .tag { margin-left: auto; flex: none; }
+  .mrow .mini { opacity: 0; transition: opacity .15s; flex: none; margin-left: 0; }
+  .mrow:hover .mini { opacity: .8; }
+  .mrow.madd { border-bottom: 0; padding-left: 10px; }
+  .mrow.madd .mini { opacity: .6; }
+  .mrow input.minput { flex: 1; border: 0; background: transparent; outline: none; color: var(--text); font: inherit; font-size: 12.5px; }
+
   footer { text-align: center; color: var(--text2); font-size: 12px; padding: 30px 0 14px; opacity: 0.7; }
 </style>
 </head>
@@ -180,6 +191,9 @@
 
     <h2>Activity</h2>
     <div id="activity"></div>
+
+    <h2>Memory</h2>
+    <div id="memory"></div>
 
     <footer>shadow mode — Resident only writes when you approve · config in ~/.resident/config.json</footer>
   </main>
@@ -330,6 +344,62 @@
     }
   })
 
+  // ---- memory: durable per-repo notes (investigations read these before digging)
+  let memEditing = false
+  function renderMemory() {
+    const byRepo = {}
+    for (const m of state.memories || []) (byRepo[m.repo] = byRepo[m.repo] || []).push(m)
+    const repos = [...new Set([...state.watching.repos, ...Object.keys(byRepo)])]
+    if (!repos.length) { $('#memory').innerHTML = '<div class="empty">Watch a repo and memory grows here — durable lessons each investigation reads before digging.</div>'; return }
+    const open = new Set([...document.querySelectorAll('details.mem[open]')].map((d) => d.dataset.repo))
+    $('#memory').innerHTML = repos.map((r) => {
+      const notes = byRepo[r] || []
+      const rows = notes.map((m) =>
+        '<div class="mrow" data-id="' + m.id + '">'
+        + '<span class="mnote">' + esc(m.note) + '</span>'
+        + '<span class="tag" title="' + (m.source === 'human' ? 'written by you' : 'written back by an investigation') + '">' + (m.source === 'human' ? 'you' : 'dig') + '</span>'
+        + '<button class="mini medit">edit</button><button class="mini mdel" title="forget this">×</button>'
+        + '</div>').join('')
+      return '<details class="mem" data-repo="' + esc(r) + '"' + (open.has(r) ? ' open' : '') + '>'
+        + '<summary>' + esc(r) + ' · ' + notes.length + ' note' + (notes.length === 1 ? '' : 's') + '</summary>'
+        + rows
+        + '<div class="mrow madd"><button class="mini" data-repo="' + esc(r) + '">＋ note</button></div>'
+        + '</details>'
+    }).join('')
+  }
+  async function sendMemory(path, body) {
+    await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) })
+    memEditing = false
+    refresh()
+  }
+  function editMemoryRow(row, value, path, toBody) {
+    memEditing = true
+    row.innerHTML = '<input class="minput" placeholder="a durable note for future digs — conventions, known false positives…" spellcheck="false">'
+    const inp = row.querySelector('input')
+    inp.value = value
+    inp.focus()
+    inp.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { memEditing = false; renderMemory(); return }
+      if (ev.key !== 'Enter') return
+      ev.preventDefault()
+      const v = inp.value.trim()
+      if (!v) { memEditing = false; renderMemory(); return }
+      sendMemory(path, toBody(v))
+    })
+  }
+  document.addEventListener('click', (e) => {
+    const del = e.target.closest('.mdel')
+    if (del) { sendMemory('/api/memory/' + del.closest('.mrow').dataset.id + '/delete'); return }
+    const edit = e.target.closest('.medit')
+    if (edit) {
+      const row = edit.closest('.mrow')
+      editMemoryRow(row, row.querySelector('.mnote').textContent, '/api/memory/' + row.dataset.id, (v) => ({ note: v }))
+      return
+    }
+    const add = e.target.closest('.madd .mini')
+    if (add) editMemoryRow(add.closest('.mrow'), '', '/api/memory', (v) => ({ repo: add.dataset.repo, note: v }))
+  })
+
   async function refresh() {
     try {
       state = await (await fetch('/api/state')).json()
@@ -352,6 +422,7 @@
     $('#nready').textContent = front.filter((i) => i.status === 'ready').length
     $('#ready').innerHTML = front.length ? front.map(card).join('') : '<div class="empty">Quiet. Nothing needs you.</div>'
     $('#activity').innerHTML = rest.length ? rest.map(row).join('') : '<div class="empty">No activity yet — first cycle coming up.</div>'
+    if (!memEditing) renderMemory()
   }
 
   $('#runnow').addEventListener('click', async () => {
