@@ -71,6 +71,3 @@ This is a young v0.2 — a working single-user local daemon, born 2026-06-09, wi
 
 AGPL-3.0 — open, and it *stays* open: if you run a modified Resident for others (including as a hosted service), you must share your source. Copyright © 2026 Christian Lund.
 
----
-
-*Built in one night with Claude Code.*
