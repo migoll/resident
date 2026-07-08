@@ -165,3 +165,7 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   0 disables) — hidden from every view, kept in the db as the audit trail, un-archived if the
   finding returns; `resident doctor` — 11 checks (tools, gh auth, config, TCC folder access, db
   roundtrip, daemon, Sentry token, notify URL) with a dim fix-hint per failure, exit 1 only on ✗.
+- 2026-07-08 — Inbox reading stability: the 4-second `/api/state` poll no longer blindly rebuilds
+  the findings/activity DOM when the rendered HTML is unchanged; when content does change, scroll
+  position is restored after the render, and opened/closed Evidence/Detail panels persist across
+  refreshes so recommendations can be read without the view snapping away.
