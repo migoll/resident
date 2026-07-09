@@ -196,6 +196,123 @@ describe('scoreSentryIssue', () => {
   })
 })
 
+// ---------------------------------------------------------------- noise discipline
+import { hm, inQuietHours, notify } from './notify'
+import { maybeDigest } from './daemon'
+
+describe('quiet hours', () => {
+  const at = (h: number, m = 0) => new Date(2026, 5, 13, h, m)
+  const q = (start: string, end: string): Config => ({ ...CFG, quietHours: { start, end } })
+  test('window wrapping midnight silences nights, not days', () => {
+    const c = q('22:00', '08:00')
+    expect(inQuietHours(c, at(23))).toBe(true)
+    expect(inQuietHours(c, at(2, 30))).toBe(true)
+    expect(inQuietHours(c, at(7, 59))).toBe(true)
+    expect(inQuietHours(c, at(8, 0))).toBe(false)
+    expect(inQuietHours(c, at(12))).toBe(false)
+    expect(inQuietHours(c, at(21, 59))).toBe(false)
+    expect(inQuietHours(c, at(22, 0))).toBe(true)
+  })
+  test('same-day window', () => {
+    const c = q('09:00', '17:00')
+    expect(inQuietHours(c, at(10))).toBe(true)
+    expect(inQuietHours(c, at(8, 59))).toBe(false)
+    expect(inQuietHours(c, at(17, 0))).toBe(false)
+  })
+  test('absent, malformed, or degenerate config never silences — fail noisy, not deaf', () => {
+    expect(inQuietHours(CFG, at(3))).toBe(false)
+    expect(inQuietHours(q('bogus', '08:00'), at(3))).toBe(false)
+    expect(inQuietHours(q('08:00', '08:00'), at(8))).toBe(false)
+  })
+  test('hm parses HH:MM and rejects junk', () => {
+    expect(hm('08:30')).toBe(510)
+    expect(hm(' 8:05 ')).toBe(485)
+    expect(Number.isNaN(hm('8.30'))).toBe(true)
+    expect(Number.isNaN(hm(''))).toBe(true)
+  })
+  test('hm rejects parseable-but-impossible times — a typo must not silently kill the digest', () => {
+    expect(Number.isNaN(hm('24:00'))).toBe(true)
+    expect(Number.isNaN(hm('25:00'))).toBe(true)
+    expect(Number.isNaN(hm('08:99'))).toBe(true)
+    expect(Number.isNaN(hm('23:60'))).toBe(true)
+    expect(hm('23:59')).toBe(1439)
+  })
+})
+
+describe('notify quiet-hours policy', () => {
+  const hhmm = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  // a window guaranteed to cover "now", whichever side of midnight we run on
+  const quietNow = (): Config => ({
+    ...CFG,
+    notify: 'https://ntfy.example/topic',
+    quietHours: { start: hhmm(new Date(Date.now() - 3_600_000)), end: hhmm(new Date(Date.now() + 3_600_000)) },
+  })
+  test('a non-forced ping is suppressed inside the window; force pierces it', async () => {
+    const calls: any[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (...a: any[]) => { calls.push(a); return new Response('') }) as any
+    try {
+      const cfg = quietNow()
+      expect(inQuietHours(cfg)).toBe(true) // sanity: the window really covers this moment
+      await notify(cfg, 'calm', 'suppressed')
+      expect(calls.length).toBe(0)
+      await notify(cfg, 'urgent', 'delivered', { force: true }) // down/blind alerts + click feedback use this
+      expect(calls.length).toBe(1)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+})
+
+describe('maybeDigest', () => {
+  const noLog = () => {}
+  test('sends once per day, only at/after the configured time, with force', () => {
+    const s = openStore(':memory:')
+    const sent: any[] = []
+    const send = (...a: any[]) => { sent.push(a) }
+    const morning = new Date(2026, 5, 13, 7, 0)
+    const after = new Date(2026, 5, 13, 9, 0)
+
+    maybeDigest({ ...CFG, digest: '08:30' }, s, noLog, send as any, morning)
+    expect(sent.length).toBe(0) // not time yet
+
+    maybeDigest({ ...CFG, digest: '08:30' }, s, noLog, send as any, after)
+    expect(sent.length).toBe(1)
+    expect(sent[0][3]).toEqual({ force: true }) // must pierce quiet hours — the user asked for it
+
+    maybeDigest({ ...CFG, digest: '08:30' }, s, noLog, send as any, after)
+    expect(sent.length).toBe(1) // flagged — once a day
+  })
+  test('digest reads the inbox: ready items + spend land in the body', () => {
+    const s = openStore(':memory:')
+    s.upsertFinding({ hash: 'h1', sense: 'git', repo: 'r', kind: 'k', title: 'fix the thing', detail: '', score: 70, status: 'ready' })
+    s.addCost(1.25)
+    const sent: any[] = []
+    maybeDigest({ ...CFG, digest: '00:00' }, s, noLog, ((...a: any[]) => sent.push(a)) as any)
+    expect(sent[0][2]).toContain('1 ready for you')
+    expect(sent[0][2]).toContain('fix the thing')
+    expect(sent[0][2]).toContain('$1.25')
+  })
+  test('digest counts every ready item, not only the 150 newest inbox rows', () => {
+    const s = openStore(':memory:')
+    s.upsertFinding({ hash: 'ready-old', sense: 'git', repo: 'r', kind: 'k', title: 'older ready work', detail: '', score: 70, status: 'ready' })
+    const readyId = s.items(1)[0].id
+    s.db.run('UPDATE items SET updated=1 WHERE id=?', [readyId])
+    for (let i = 0; i < 151; i++)
+      s.upsertFinding({ hash: 'ignored-' + i, sense: 'git', repo: 'r', kind: 'k', title: 'recent activity', detail: '', score: 1, status: 'ignored' })
+    const sent: any[] = []
+    maybeDigest({ ...CFG, digest: '00:00' }, s, noLog, ((...a: any[]) => sent.push(a)) as any)
+    expect(sent[0][2]).toContain('1 ready for you')
+    expect(sent[0][2]).toContain('older ready work')
+  })
+  test('no digest configured → never sends', () => {
+    const s = openStore(':memory:')
+    const sent: any[] = []
+    maybeDigest(CFG, s, noLog, ((...a: any[]) => sent.push(a)) as any)
+    expect(sent.length).toBe(0)
+  })
+})
+
 // ---------------------------------------------------------------- branch naming
 describe('branchFor', () => {
   test('deterministic, slugged, length-capped', () => {

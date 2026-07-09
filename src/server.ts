@@ -248,14 +248,15 @@ export function startServer(deps: {
           if (res.ok) {
             store.update(item.id, { status: 'approved', pr_url: res.pr_url, cost: item.cost + res.cost })
             log(`  → ${res.pr_url}`)
-            notify(cfg, 'Resident: PR opened', `${item.title}\n${res.pr_url}`)
+            // force: the human JUST clicked Approve — feedback for a live action never sleeps
+            notify(cfg, 'Resident: PR opened', `${item.title}\n${res.pr_url}`, { force: true })
           } else {
             const noChanges = (res as any).noChanges
             // a command that changed nothing isn't a failure — surface it as ready with the explanation.
             // cost lands on the item either way (a failed AI approve still spent real money)
             store.update(item.id, { status: noChanges ? 'ready' : 'failed', cost: item.cost + res.cost, reason: noChanges ? 'command ran but produced no changes' : 'apply/PR failed — see runs log' })
             log(`  → ${noChanges ? 'command: no changes' : 'approve failed'}`)
-            if (!noChanges) notify(cfg, 'Resident: approve failed', item.title)
+            if (!noChanges) notify(cfg, 'Resident: approve failed', item.title, { force: true }) // click feedback never sleeps
           }
         })()
         return Response.json({ ok: true })

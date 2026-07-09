@@ -4,7 +4,7 @@ import { maybeRotateLog } from './hygiene'
 import { run } from './proc'
 import { runSenses } from './senses'
 import { investigate, branchFor } from './hands'
-import { notify } from './notify'
+import { notify, hm } from './notify'
 import { INVESTIGATE_THRESHOLD, MUTE_THRESHOLD, type Store } from './store'
 
 export interface DaemonState {
@@ -85,6 +85,31 @@ function blindnessCheck(cfg: Config, store: Store) {
   }
 }
 
+/** Once a day, the first cycle at/after the configured digest time sends ONE summary ping —
+ *  the morning-coffee read of what accumulated while pings were quiet. `send` is injectable
+ *  for tests; the flag is set before sending (a lost digest is never retried — silence > spam). */
+export function maybeDigest(cfg: Config, store: Store, log: (s: string) => void, send = notify, now = new Date()) {
+  if (!cfg.digest) return
+  const t = hm(cfg.digest)
+  if (Number.isNaN(t)) return
+  if (now.getHours() * 60 + now.getMinutes() < t) return
+  // LOCAL date key, matching the local time gate above — a UTC key would mint a second key
+  // mid-local-day for small-hours digest times in UTC+ zones (double-fire, then drift)
+  const key = `digest:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  if (store.metaGet(key)) return
+  store.metaSet(key, String(Date.now()))
+  const readyCount = store.readyCount()
+  const ready = store.ready(3)
+  const queued = store.queued(99).length
+  const lines = [
+    readyCount ? `${readyCount} ready for you${queued ? ` · ${queued} queued` : ''}` : `nothing needs you${queued ? ` — ${queued} queued` : ''}`,
+    ...ready.map((i) => `· ${i.title}${i.repo ? ` [${i.repo}]` : ''}`),
+    `$${store.costToday().toFixed(2)} AI spend today · ${store.usedToday()} investigation(s)`,
+  ]
+  log(`☉ digest sent (${readyCount} ready)`)
+  send(cfg, 'Resident: morning digest', lines.join('\n'), { force: true })
+}
+
 /** One full heartbeat: outcomes → sense → triage → investigate within budget. */
 export async function cycle(
   cfg: Config,
@@ -133,9 +158,11 @@ export async function cycle(
     for (const item of store.queued(budget)) {
       const repo = cfg.repos.find((r) => r.name === item.repo)
       if (!repo) {
-        // repo-less alert (uptime, self): surface directly, nothing to dig through
+        // repo-less alert (uptime, self): surface directly, nothing to dig through.
+        // Hard outages and blindness PIERCE quiet hours — a site down at 3am and a daemon gone
+        // blind are exactly what the phone alarm exists for; only calm pings sleep.
         store.update(item.id, { status: 'ready', reason: item.sense === 'self' ? 'action needed on your Mac' : 'alert — no local repo to investigate' })
-        notify(cfg, 'Resident: alert', item.title)
+        notify(cfg, 'Resident: alert', item.title, { force: item.kind === 'down' || item.kind === 'blind' })
         continue
       }
       // routine digs run on the cheap base model; high scores and Re-investigate earn the strong one
@@ -171,6 +198,8 @@ export async function cycle(
     const stillQueued = store.queued(99).length
     if (stillQueued) log(`  ${stillQueued} item(s) queued — investigation budget exhausted for now`)
   }
+
+  maybeDigest(cfg, store, log)
 
   log(`◉ cycle done in ${Math.round((Date.now() - t0) / 1000)}s`)
   return { findings: findings.length, new: fresh, investigated }
