@@ -16,7 +16,10 @@ export function startServer(deps: {
 }) {
   const { cfg, store, state, log } = deps
   const html = readFileSync(new URL('./ui/inbox.html', import.meta.url), 'utf8')
-  const port = Number(process.env.PORT) || 5117
+  // PORT=0 asks the OS for an ephemeral port — useful for parallel-safe integration tests.
+  // An absent, blank, or malformed value retains the normal inbox port.
+  const portText = process.env.PORT?.trim()
+  const port = portText !== undefined && /^\d+$/.test(portText) ? Number(portText) : 5117
 
   // repo name → https://github.com/... (best-effort; retried while empty,
   // e.g. when folder access was denied at startup and granted later)

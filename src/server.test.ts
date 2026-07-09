@@ -31,13 +31,9 @@ beforeAll(() => {
   if (!tmp || !CONFIG_PATH.startsWith(tmp) || CONFIG_PATH.startsWith(join(homedir(), '.resident')))
     throw new Error(`RESIDENT_HOME override not in effect (CONFIG_PATH=${CONFIG_PATH}) — refusing to touch config`)
 
-  // startServer takes its port from the PORT env; a few random high ports dodge collisions
-  let err: unknown
-  for (let i = 0; i < 5 && !srv; i++) {
-    process.env.PORT = String(20000 + Math.floor(Math.random() * 30000))
-    try { srv = startServer({ cfg, store, state, requestCycle, log: () => {} }) } catch (e) { err = e }
-  }
-  if (!srv) throw err
+  // PORT=0 delegates allocation to the OS, avoiding flaky random-port collisions in parallel runs.
+  process.env.PORT = '0'
+  srv = startServer({ cfg, store, state, requestCycle, log: () => {} })
   base = `http://127.0.0.1:${srv.port}`
 })
 afterAll(() => { srv?.stop(); delete process.env.PORT })
@@ -85,6 +81,24 @@ describe('GET /api/state', () => {
     expect(by(runnable.id).commandAllowed).toBe(true)
     expect(by(blocked.id).commandAllowed).toBe(false)
     expect('commandAllowed' in by(plain.id)).toBe(false) // only command-fix items carry the flag
+  })
+})
+
+// ---------------------------------------------------------------- repository memory
+describe('POST /api/memory', () => {
+  test('refuses a stale notebook save instead of erasing a learning appended during editing', async () => {
+    const before = await (await fetch(base + '/api/state')).json()
+    const initial = before.memories.find((m: any) => m.repo === 'allowed')
+    expect(initial).toEqual({ repo: 'allowed', notes: '', updated: null, revision: null })
+
+    expect((await post('/api/memory', { repo: 'allowed', notes: 'Use bun.', revision: null })).status).toBe(200)
+    const afterSave = await (await fetch(base + '/api/state')).json()
+    const revision = afterSave.memories.find((m: any) => m.repo === 'allowed').revision
+    store.appendMemory('allowed', '- Generated files are not hand-edited.')
+
+    const stale = await post('/api/memory', { repo: 'allowed', notes: 'Use npm.', revision })
+    expect(stale.status).toBe(409)
+    expect(store.memory('allowed')?.notes).toContain('Generated files are not hand-edited.')
   })
 })
 
