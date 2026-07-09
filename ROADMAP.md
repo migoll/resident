@@ -65,8 +65,10 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
 - [ ] **Smoke tests + CI**: senses/triage/store/watch-API covered; GitHub Actions on the repo;
       Resident watches its own CI (dogfood loop closes)
       *(progress 06-10: `bun test` suite checked in — judgment logic (tiering/allowlist/extraction/
-      cost-estimate) + store CRUD on `:memory:`; Actions workflow added. Remaining: senses/triage/
-      watch-API coverage + the dogfood loop.)*
+      cost-estimate) + store CRUD on `:memory:`; Actions workflow added. 06-13: senses covered on
+      canned process output, triage via cycle() on `:memory:`, and the watch/state/item API against
+      a real server — 76 tests, all on a throwaway `RESIDENT_HOME` so suites can never touch the
+      real ~/.resident. Remaining: the dogfood loop.)*
 - [x] **Hygiene**: log rotation, archive items older than N days, `resident doctor`
       (checks bun/claude/gh/tailscale auth and folder access)
 
@@ -177,3 +179,10 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   after a successful dig; notes remain visible and editable rather than becoming opaque model state.
 - 2026-06-13 — positioning sharpened in README + thesis — Resident vs trigger→PR automation
   (new section: "Isn't this just a cron job running an agent?")
+- 2026-06-13 — test-coverage pass (Phase 1): senses driven by canned process output (incl. proving
+  the stdout/out split keeps gh upgrade nags out of JSON parses), triage cycle() on `:memory:`
+  (threshold + promotion, budget caps, escalation consumed on success, killed-run estimate
+  phrasing, repo-less alerts), and the watch/state/item API against a real Bun.serve instance.
+  `RESIDENT_HOME` now overrides the state dir, and a bun-test preload points it at a tmp dir so
+  suites can never touch the real ~/.resident. 35 → 76 tests; approve/issue happy paths stay
+  untested by design (they spawn claude/gh for real).

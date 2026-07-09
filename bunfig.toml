@@ -1,0 +1,6 @@
+# bun test runs every *.test.ts in ONE process — the preload points Resident's state dir at a
+# throwaway tmp dir before anything can import config.ts (HOME is computed at import time, and
+# the watch-API tests write config through the real saveConfig()). Test-only; `bun src/cli.ts`
+# and `bun build` ignore the [test] section entirely.
+[test]
+preload = ["./src/test-setup.ts"]
