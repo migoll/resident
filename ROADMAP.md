@@ -7,7 +7,9 @@
 **The thesis:** every prior AI dev tool waits for a prompt. Resident inverts initiative — it
 watches, judges, investigates, and comes to you with evidence. The product is not the agent;
 it's the **judgment** (what to act on, what to ask, what to shut up about) and the **trust ramp**
-(read-only → propose → act, earned per repo).
+(read-only → propose → act, earned per repo). The act itself — trigger fires, agent runs, PR
+appears — is commodity. A trigger is a boolean, not judgment. Notice → judge → remember → stay
+quiet is what the boolean can't give you — the PR at the end is the easy part.
 
 **Definition of done (1.0):** a developer who isn't Christian installs it in under 10 minutes,
 runs it for a month unattended without noise fatigue, grants it real authority because the
@@ -173,3 +175,5 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   in the inbox for decisions, conventions, known false positives, and failed approaches. Every
   investigation receives that context, is asked for a small verified memory update, and appends it
   after a successful dig; notes remain visible and editable rather than becoming opaque model state.
+- 2026-06-13 — positioning sharpened in README + thesis — Resident vs trigger→PR automation
+  (new section: "Isn't this just a cron job running an agent?")

@@ -20,6 +20,19 @@ Every AI coding tool so far has the same dead spot: a blinking cursor, waiting f
 - **Remembers what matters.** Each watched repo has a small, editable notebook in the inbox for decisions, conventions, known false positives, and failed approaches. Investigations read it as context and append only concise, verified learnings — the notes always stay visible and yours to edit.
 - **Tracks outcomes.** Opened PRs are followed to merged/closed automatically. Interrupted runs are reconciled against GitHub on restart. If macOS revokes folder access, Resident detects its own blindness and tells you loudly — "quiet" and "blind" are never allowed to look the same.
 
+## "Isn't this just a cron job running an agent?"
+
+The *act* part — something triggers, an agent runs, a PR appears — is commodity. CI-triggered Claude does it, scheduled cloud agents do it, Dependabot has done it for years. Dependabot is also the cautionary tale: trigger → PR with no judgment in between is precisely the automation everyone learns to mute.
+
+A trigger is a boolean, not judgment. What it can't give you:
+
+- **State between runs.** A cron'd agent re-discovers the same stale branch every cycle — then either re-spends tokens re-investigating it or spams duplicate PRs. Resident's store means a finding is judged once, deduped forever, and its outcome (merged, dismissed, closed unmerged) is remembered.
+- **Free senses gating paid judgment.** Re-deriving "does this matter?" in model calls every 15 minutes is expensive and inconsistent. Resident's senses are deterministic and free; tokens are spent only past a scored threshold, under hard budget ceilings. That inversion is what makes always-on affordable at all.
+- **Signals with no event to subscribe to.** Nothing fires a webhook when a branch goes stale, a dependency drifts, a site slows past its limit, or a Sentry error fades into old noise. Those signals exist only because something polls for them on a heartbeat.
+- **An accountability loop.** A CI-triggered agent doesn't know its last PR was closed unmerged, can't show you what it chose to ignore, and never learns from your dismissals. Resident's inbox is built around visible judgment — everything ignored, with its reason.
+
+Notice → judge → remember → stay quiet is the product. The PR at the end is the easy part.
+
 ## Quickstart
 
 Requirements: [bun](https://bun.sh), the [`claude`](https://docs.anthropic.com/claude-code) CLI (logged in — Resident rides your existing subscription, no API key needed), and [`gh`](https://cli.github.com) (logged in) for the GitHub senses and PR/issue actions.

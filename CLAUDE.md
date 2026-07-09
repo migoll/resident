@@ -45,6 +45,7 @@ bun build src/cli.ts --target=bun --outfile=/dev/null   # parse check
 - UI is a single `ui/inbox.html`, vanilla JS, Apple-dark design (Christian's direction: "Apple").
 - Autonomous work is read-only by construction; writes only behind human clicks. Budgets are
   hard caps. Everything ignored is shown with its reason. (Full principles in ROADMAP.md.)
-- Commit + push to main freely (public repo, Christian-authorized); imperative messages.
+- Feature work goes up as one PR per feature — Christian reads every PR before merge. Trivial
+  meta-fixes may still push to main. Imperative messages.
 - Investigations cost real subscription usage — when testing, use `--investigations 0` or low
   budgets; don't burn the daily budget on smoke tests.
