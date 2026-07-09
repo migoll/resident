@@ -44,6 +44,16 @@ export interface Item {
   archived: number
 }
 
+/** A human-editable, durable notebook for one watched repository. */
+export interface RepoMemory {
+  repo: string
+  notes: string
+  created: number
+  updated: number
+}
+
+export const MAX_MEMORY_CHARS = 16_000
+
 export const INVESTIGATE_THRESHOLD = 55
 
 /** Open the item store. `dbPath` exists for tests (`:memory:`); production always uses the default. */
@@ -76,6 +86,12 @@ export function openStore(dbPath?: string) {
     archived INTEGER NOT NULL DEFAULT 0
   )`)
   db.run(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
+  db.run(`CREATE TABLE IF NOT EXISTS repo_memory (
+    repo TEXT PRIMARY KEY,
+    notes TEXT NOT NULL,
+    created INTEGER NOT NULL,
+    updated INTEGER NOT NULL
+  )`)
 
   // migrations for DBs created before these columns existed (no-op on fresh DBs — duplicate-column throws and is swallowed)
   for (const stmt of [
@@ -148,6 +164,42 @@ export function openStore(dbPath?: string) {
 
     archivedCount(): number {
       return db.query<any, any>('SELECT COUNT(*) AS n FROM items WHERE archived=1').get()?.n ?? 0
+    },
+
+    /** The repository notebook. Empty means no saved memory yet. */
+    memory(repo: string): RepoMemory | null {
+      return db.query<RepoMemory, any>('SELECT * FROM repo_memory WHERE repo=?').get(repo) ?? null
+    },
+
+    memories(): RepoMemory[] {
+      return db.query<RepoMemory, any>('SELECT * FROM repo_memory ORDER BY repo').all()
+    },
+
+    /** Replace a repository notebook from the inbox. An empty notebook is removed. */
+    setMemory(repo: string, notes: string): boolean {
+      const clean = notes.trim()
+      if (clean.length > MAX_MEMORY_CHARS) return false
+      if (!clean) {
+        db.run('DELETE FROM repo_memory WHERE repo=?', [repo])
+        return true
+      }
+      const now = Date.now()
+      db.run(
+        `INSERT INTO repo_memory (repo,notes,created,updated) VALUES (?,?,?,?)
+         ON CONFLICT(repo) DO UPDATE SET notes=excluded.notes, updated=excluded.updated`,
+        [repo, clean, now, now],
+      )
+      return true
+    },
+
+    /** Keep an investigation's concise learning separate from human-authored notes. */
+    appendMemory(repo: string, learning: string): boolean {
+      const clean = learning.trim()
+      if (!clean) return true
+      const previous = store.memory(repo)?.notes
+      const entry = `### ${new Date().toISOString().slice(0, 10)} · Resident investigation\n${clean}`
+      const next = previous ? `${previous}\n\n${entry}` : entry
+      return store.setMemory(repo, next)
     },
 
     metaGet(key: string): string | null {

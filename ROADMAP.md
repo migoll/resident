@@ -70,7 +70,7 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
 
 ## Phase 2 — The moat (memory + earned autonomy)
 
-- [ ] **Memory layer** (the compounding asset): per-repo durable notes — decisions, known
+- [x] **Memory layer** (the compounding asset): per-repo durable notes — decisions, known
       false-positives, conventions, "tried X, failed because Y". Investigations read memory
       before digging and write back after. Surfaced + editable in the inbox.
 - [ ] **Dismissals teach**: repeated dismissal of a kind/repo dampens its score automatically
@@ -169,3 +169,7 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   the findings/activity DOM when the rendered HTML is unchanged; when content does change, scroll
   position is restored after the render, and opened/closed Evidence/Detail panels persist across
   refreshes so recommendations can be read without the view snapping away.
+- 2026-07-09 — Phase 2 memory layer: each watched repo now has a durable, human-editable notebook
+  in the inbox for decisions, conventions, known false positives, and failed approaches. Every
+  investigation receives that context, is asked for a small verified memory update, and appends it
+  after a successful dig; notes remain visible and editable rather than becoming opaque model state.

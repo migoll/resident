@@ -157,6 +157,15 @@
   }
   .mini:hover { color: var(--text); background: rgba(118, 118, 128, 0.34); }
 
+  .memory-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 13px 14px; margin-bottom: 10px; }
+  .memory-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 9px; }
+  .memory-name { font-weight: 600; font-size: 13px; }
+  .memory-meta { color: var(--text2); font-size: 11.5px; }
+  .memory-card textarea { display: block; width: 100%; min-height: 88px; resize: vertical; color: var(--text); background: rgba(0,0,0,.2); border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; outline: none; }
+  .memory-card textarea:focus { border-color: rgba(10, 132, 255, .65); }
+  .memory-actions { display: flex; align-items: center; gap: 9px; margin-top: 9px; }
+  .memory-hint { color: var(--text2); font-size: 11.5px; }
+
   footer { text-align: center; color: var(--text2); font-size: 12px; padding: 30px 0 14px; opacity: 0.7; }
 </style>
 </head>
@@ -174,6 +183,9 @@
 
   <main>
     <div class="chips" id="chips"></div>
+
+    <h2>Repository memory</h2>
+    <div id="memory"></div>
 
     <h2>Ready for you · <span class="n" id="nready">0</span></h2>
     <div id="ready"></div>
@@ -209,6 +221,16 @@
   }
 
   function scoreCls(s) { return s >= 80 ? 'hi' : s >= 60 ? 'mid' : 'lo' }
+
+  function memoryCard(m) {
+    const age = m.updated ? ago(m.updated) : ''
+    const meta = m.updated ? (age === 'now' ? 'updated just now' : 'updated ' + age + ' ago') : 'no notes yet'
+    return '<div class="memory-card">'
+      + '<div class="memory-head"><span class="memory-name">' + esc(m.repo) + '</span><span class="memory-meta">' + meta + '</span></div>'
+      + '<textarea aria-label="Memory for ' + esc(m.repo) + '" placeholder="Decisions, conventions, known false positives, or what was tried and why it failed…">' + esc(m.notes) + '</textarea>'
+      + '<div class="memory-actions"><button class="btn subtle" data-repo="' + esc(m.repo) + '" onclick="saveMemory(this)">Save memory</button><span class="memory-hint">Used as context for future investigations.</span></div>'
+      + '</div>'
+  }
 
   function card(i) {
     const ru = (state && state.repoUrls && state.repoUrls[i.repo]) || null
@@ -296,6 +318,20 @@
   }
   window.act = act
 
+  async function saveMemory(button) {
+    const card = button.closest('.memory-card')
+    const notes = card.querySelector('textarea').value
+    button.disabled = true
+    try {
+      const r = await fetch('/api/memory', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repo: button.dataset.repo, notes }) })
+      const result = await r.json()
+      if (!result.ok) alert(result.error || 'Could not save memory')
+      else await refresh()
+    } catch { alert('Could not save memory') }
+    finally { button.disabled = false }
+  }
+  window.saveMemory = saveMemory
+
   // ---- watchlist editing
   let adding = false
   function renderChips() {
@@ -361,6 +397,9 @@
       + (state.costToday ? ' · $' + state.costToday.toFixed(2) + ' AI usage (investigations + approvals)' : '')
 
     if (!adding) renderChips()
+    // Never replace a notebook while its textarea is being edited; the inbox poll must not eat a thought mid-sentence.
+    if (!document.activeElement?.matches('.memory-card textarea'))
+      setHtmlIfChanged($('#memory'), state.memories.map(memoryCard).join(''))
 
     const items = state.items
     const front = items.filter((i) => ['ready', 'investigating', 'approving', 'working', 'approved', 'tracked'].includes(i.status))

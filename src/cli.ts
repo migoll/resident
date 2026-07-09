@@ -135,6 +135,7 @@ ${B}resident status${R}
   ignored     ${by('ignored')} ${D}(below threshold)${R}
   dismissed   ${by('dismissed')}
   archived    ${store.archivedCount()} ${D}(retention — kept in the db)${R}
+  memory      ${store.memories().length} ${D}(repository notebook${store.memories().length === 1 ? '' : 's'})${R}
   today       ${store.usedToday()} investigations · $${store.costToday().toFixed(2)}
 `)
     break

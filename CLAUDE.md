@@ -29,13 +29,13 @@ bun build src/cli.ts --target=bun --outfile=/dev/null   # parse check
 - `config.ts` — `~/.resident/config.json`: repos (path/name/checks/pull), urls, budgets,
   intervalMinutes, model, bind, notify
 - `senses.ts` — polling watchers: git/deps/typecheck/uptime/github/sentry → scored `Finding`s
-- `store.ts` — SQLite items table; statuses: queued→investigating→ready→(approving→approved→
+- `store.ts` — SQLite findings + per-repo memory notebook; statuses: queued→investigating→ready→(approving→approved→
   merged|closed)|(working→tracked)|failed|ignored|dismissed; INVESTIGATE_THRESHOLD = 55
 - `daemon.ts` — cycle loop: refreshOutcomes → blindnessCheck → senses → triage → budgeted
   investigations; reconcile() heals restart-orphaned runs against GitHub
 - `hands.ts` — headless `claude -p` runners: investigate (READONLY_TOOLS) and approve
   (APPLY_TOOLS, disposable git worktree in /tmp, never the user's checkout)
-- `server.ts` — inbox API: /api/state, /api/cycle, /api/watch, /api/item/:id/{approve,issue,
+- `server.ts` — inbox API: /api/state, /api/cycle, /api/watch, /api/memory, /api/item/:id/{approve,issue,
   dismiss,restore,reinvestigate}; serves ui/inbox.html + PWA manifest/icon
 - `notify.ts` — ntfy/Slack pushes (fire-and-forget)
 
