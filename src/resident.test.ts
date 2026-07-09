@@ -275,6 +275,14 @@ describe('dismissals teach', () => {
     expect(s.mutes()).toHaveLength(1)
     expect(s.mutes()[0].source).toBe('manual')
   })
+  test('a new mute immediately suppresses matching queued work', () => {
+    const s = openStore(':memory:')
+    s.upsertFinding({ hash: 'queued', sense: 'git', repo: 'r', kind: 'todos', title: 't', detail: '', score: 60, status: 'queued' })
+    s.addMute('r', 'todos', 'manual')
+    const item = s.items(1)[0]
+    expect(item.status).toBe('ignored')
+    expect(item.reason).toBe('muted by you — unmute from the inbox')
+  })
   test('a muted kind is never promoted back to queued by a high score — and its reason stays honest', () => {
     const s = openStore(':memory:')
     const f = { hash: 'h', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 20, status: 'ignored' as const, reason: 'below threshold (score 20)' }

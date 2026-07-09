@@ -100,6 +100,8 @@ export function startServer(deps: {
           store.removeMute(repo, kind)
           log(`🔊 unmuted ${kind} in ${repo || 'alerts'}`)
         }
+        // Re-sense immediately: unmuting should restore eligible findings now, not at the next heartbeat.
+        deps.requestCycle()
         return Response.json({ ok: true })
       }
 

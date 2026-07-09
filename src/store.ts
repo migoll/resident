@@ -276,7 +276,21 @@ export function openStore(dbPath?: string) {
      *  path. Enforced here at the store boundary so no caller can forget the rule. */
     addMute(repo: string, kind: string, source: Mute['source']): boolean {
       if (kind === 'blind') return false
-      db.run('INSERT INTO mutes (repo, kind, created, source) VALUES (?,?,?,?) ON CONFLICT(repo, kind) DO NOTHING', [repo, kind, Date.now(), source])
+      const added = db.run(
+        'INSERT INTO mutes (repo, kind, created, source) VALUES (?,?,?,?) ON CONFLICT(repo, kind) DO NOTHING',
+        [repo, kind, Date.now(), source],
+      ).changes > 0
+      // A mute must immediately stop work already waiting in the queue, not merely affect findings
+      // first seen on a later cycle. Otherwise it can still spend an investigation after the user said no.
+      if (added) {
+        const reason = source === 'auto'
+          ? `muted — you've dismissed ${kind} in ${repo || 'alerts'} ${MUTE_THRESHOLD}×; unmute from the inbox`
+          : 'muted by you — unmute from the inbox'
+        db.run(
+          "UPDATE items SET status='ignored', reason=?, updated=? WHERE repo=? AND kind=? AND status='queued'",
+          [reason, Date.now(), repo, kind],
+        )
+      }
       return true
     },
 
