@@ -202,6 +202,8 @@
   let state = null
   let nextAt = 0
   const openDetails = new Set()
+  const memoryBases = new Map()
+  const dirtyMemory = new Set()
 
   function ago(ts) {
     const s = Math.max(0, (Date.now() - ts) / 1000)
@@ -230,6 +232,11 @@
       + '<textarea aria-label="Memory for ' + esc(m.repo) + '" placeholder="Decisions, conventions, known false positives, or what was tried and why it failed…">' + esc(m.notes) + '</textarea>'
       + '<div class="memory-actions"><button class="btn subtle" data-repo="' + esc(m.repo) + '" onclick="saveMemory(this)">Save memory</button><span class="memory-hint">Used as context for future investigations.</span></div>'
       + '</div>'
+  }
+
+  function renderMemory() {
+    state.memories.forEach((m) => memoryBases.set(m.repo, { revision: m.revision, notes: m.notes }))
+    setHtmlIfChanged($('#memory'), state.memories.map(memoryCard).join(''))
   }
 
   function card(i) {
@@ -279,7 +286,7 @@
       ? (ru ? '<a class="tag" target="_blank" href="' + esc(ru) + '">' + esc(i.repo) + ' ↗</a>' : '<span class="tag">' + esc(i.repo) + '</span>')
       : '<span class="tag">alert</span>'
 
-    return '<div class="card' + (i.sense === 'self' ? ' alert' : '') + '">'
+    return '<div class="card' + (i.sense === 'self' ? ' alert' : '') + '" data-item="' + esc(i.id) + '">'
       + '<div class="top"><span class="score ' + scoreCls(i.score) + '">' + i.score + '</span>'
       + '<span class="title">' + esc(i.title) + '</span>'
       + '<span class="tags">' + repoTag
@@ -321,16 +328,26 @@
   async function saveMemory(button) {
     const card = button.closest('.memory-card')
     const notes = card.querySelector('textarea').value
+    const repo = button.dataset.repo
+    const base = memoryBases.get(repo)
     button.disabled = true
     try {
-      const r = await fetch('/api/memory', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repo: button.dataset.repo, notes }) })
+      const r = await fetch('/api/memory', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repo, notes, revision: base?.revision ?? null }) })
       const result = await r.json()
       if (!result.ok) alert(result.error || 'Could not save memory')
-      else await refresh()
+      else { dirtyMemory.delete(repo); await refresh() }
     } catch { alert('Could not save memory') }
     finally { button.disabled = false }
   }
   window.saveMemory = saveMemory
+
+  document.addEventListener('input', (e) => {
+    const textarea = e.target.closest('.memory-card textarea')
+    if (!textarea) return
+    const repo = textarea.closest('.memory-card').querySelector('[data-repo]').dataset.repo
+    if (textarea.value === (memoryBases.get(repo)?.notes ?? '')) dirtyMemory.delete(repo)
+    else dirtyMemory.add(repo)
+  })
 
   // ---- watchlist editing
   let adding = false
@@ -397,9 +414,8 @@
       + (state.costToday ? ' · $' + state.costToday.toFixed(2) + ' AI usage (investigations + approvals)' : '')
 
     if (!adding) renderChips()
-    // Never replace a notebook while its textarea is being edited; the inbox poll must not eat a thought mid-sentence.
-    if (!document.activeElement?.matches('.memory-card textarea'))
-      setHtmlIfChanged($('#memory'), state.memories.map(memoryCard).join(''))
+    // Never replace unsaved notebook edits; the inbox poll must not eat a thought mid-sentence.
+    if (!dirtyMemory.size) renderMemory()
 
     const items = state.items
     const front = items.filter((i) => ['ready', 'investigating', 'approving', 'working', 'approved', 'tracked'].includes(i.status))
@@ -408,10 +424,23 @@
     $('#nready').textContent = front.filter((i) => i.status === 'ready').length
     const x = window.scrollX
     const y = window.scrollY
+    const ready = $('#ready')
+    const paneScroll = new Map([...ready.querySelectorAll('.card[data-item] pre')].map((pane) => {
+      const card = pane.closest('.card')
+      return [card.dataset.item + ':' + [...card.querySelectorAll('pre')].indexOf(pane), { left: pane.scrollLeft, top: pane.scrollTop }]
+    }))
+    const readyChanged = setHtmlIfChanged(ready, front.length ? front.map(card).join('') : '<div class="empty">Quiet. Nothing needs you.</div>')
     const changed = [
-      setHtmlIfChanged($('#ready'), front.length ? front.map(card).join('') : '<div class="empty">Quiet. Nothing needs you.</div>'),
+      readyChanged,
       setHtmlIfChanged($('#activity'), rest.length ? rest.map(row).join('') : '<div class="empty">No activity yet — first cycle coming up.</div>'),
     ].some(Boolean)
+    if (readyChanged) requestAnimationFrame(() => {
+      ready.querySelectorAll('.card[data-item] pre').forEach((pane) => {
+        const card = pane.closest('.card')
+        const pos = paneScroll.get(card.dataset.item + ':' + [...card.querySelectorAll('pre')].indexOf(pane))
+        if (pos) { pane.scrollLeft = pos.left; pane.scrollTop = pos.top }
+      })
+    })
     if (changed) {
       requestAnimationFrame(() => {
         if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y)

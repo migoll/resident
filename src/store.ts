@@ -50,6 +50,8 @@ export interface RepoMemory {
   notes: string
   created: number
   updated: number
+  /** Bumped on every write so the inbox can refuse a stale whole-notebook save. */
+  revision: number
 }
 
 export const MAX_MEMORY_CHARS = 16_000
@@ -90,7 +92,8 @@ export function openStore(dbPath?: string) {
     repo TEXT PRIMARY KEY,
     notes TEXT NOT NULL,
     created INTEGER NOT NULL,
-    updated INTEGER NOT NULL
+    updated INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1
   )`)
 
   // migrations for DBs created before these columns existed (no-op on fresh DBs — duplicate-column throws and is swallowed)
@@ -99,6 +102,7 @@ export function openStore(dbPath?: string) {
     'ALTER TABLE items ADD COLUMN escalate INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE items ADD COLUMN command TEXT',
     'ALTER TABLE items ADD COLUMN archived INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE repo_memory ADD COLUMN revision INTEGER NOT NULL DEFAULT 1',
   ]) {
     try { db.run(stmt) } catch {}
   }
@@ -186,10 +190,20 @@ export function openStore(dbPath?: string) {
       const now = Date.now()
       db.run(
         `INSERT INTO repo_memory (repo,notes,created,updated) VALUES (?,?,?,?)
-         ON CONFLICT(repo) DO UPDATE SET notes=excluded.notes, updated=excluded.updated`,
+         ON CONFLICT(repo) DO UPDATE SET notes=excluded.notes, updated=excluded.updated,
+           revision=repo_memory.revision+1`,
         [repo, clean, now, now],
       )
       return true
+    },
+
+    /** Save a human edit only if the notebook is still the version the inbox rendered.
+     * This prevents a stale textarea from replacing an investigation learning that arrived while it was open. */
+    saveMemory(repo: string, notes: string, expectedRevision: number | null): 'saved' | 'conflict' | 'too_large' {
+      if (notes.trim().length > MAX_MEMORY_CHARS) return 'too_large'
+      const current = store.memory(repo)
+      if ((current?.revision ?? null) !== expectedRevision) return 'conflict'
+      return store.setMemory(repo, notes) ? 'saved' : 'too_large'
     },
 
     /** Keep an investigation's concise learning separate from human-authored notes. */

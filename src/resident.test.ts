@@ -159,6 +159,15 @@ describe('repository memory', () => {
     expect(s.memory('web')).toBeNull()
     expect(s.setMemory('web', 'x'.repeat(16_001))).toBe(false)
   })
+
+  test('refuses a stale whole-notebook save so it cannot erase a newer learning', () => {
+    const s = openStore(':memory:')
+    s.setMemory('web', '## Decisions\nUse bun.')
+    const revision = s.memory('web')!.revision
+    s.appendMemory('web', '- Generated files are not hand-edited.')
+    expect(s.saveMemory('web', '## Decisions\nUse npm.', revision)).toBe('conflict')
+    expect(s.memory('web')?.notes).toContain('Generated files are not hand-edited.')
+  })
 })
 
 // ---------------------------------------------------------------- sentry judgment
