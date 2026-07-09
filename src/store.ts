@@ -56,7 +56,22 @@ export interface RepoMemory {
 
 export const MAX_MEMORY_CHARS = 16_000
 
+export interface Mute {
+  repo: string // '' for repo-less kinds (uptime alerts)
+  kind: string
+  created: number
+  source: 'auto' | 'manual'
+}
+
 export const INVESTIGATE_THRESHOLD = 55
+
+/** Distinct dismissals of one (repo, kind) before Resident learns to stop asking. */
+export const MUTE_THRESHOLD = 3
+
+/** Kinds whose silence may never be EARNED, only explicitly chosen — and 'blind' not even that.
+ *  Three routine dismissals must not be able to disarm the 2am alarm: hard outages ('down') and
+ *  fatal prod errors ('fatal') only go quiet when the human says so deliberately (/api/mute). */
+export const NEVER_AUTO_MUTE = new Set(['blind', 'down', 'fatal'])
 
 /** Open the item store. `dbPath` exists for tests (`:memory:`); production always uses the default. */
 export function openStore(dbPath?: string) {
@@ -95,6 +110,13 @@ export function openStore(dbPath?: string) {
     updated INTEGER NOT NULL,
     revision INTEGER NOT NULL DEFAULT 1
   )`)
+  db.run(`CREATE TABLE IF NOT EXISTS mutes (
+    repo TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    created INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'auto',
+    PRIMARY KEY (repo, kind)
+  )`)
 
   // migrations for DBs created before these columns existed (no-op on fresh DBs — duplicate-column throws and is swallowed)
   for (const stmt of [
@@ -115,16 +137,20 @@ export function openStore(dbPath?: string) {
     upsertFinding(f: {
       hash: string; sense: string; repo: string; kind: string
       title: string; detail: string; score: number; status: ItemStatus; reason?: string
-    }): 'new' | 'existing' {
+    }, muted = false): 'new' | 'existing' {
       const now = Date.now()
       const ex = db.query<any, any>('SELECT id, status FROM items WHERE hash = ?').get(f.hash)
       if (ex) {
-        const promote = ex.status === 'ignored' && f.score >= INVESTIGATE_THRESHOLD
         // archived=0: a sense re-emitting the hash means the finding is back — retention must not hide a live problem
-        db.run(
-          'UPDATE items SET updated=?, title=?, detail=?, score=?, archived=0' + (promote ? ", status='queued', reason=NULL" : '') + ' WHERE id=?',
-          [now, f.title, f.detail, f.score, ex.id],
-        )
+        // a muted kind never earns its way back to queued on score alone — that's what unmute is for
+        const promote = !muted && ex.status === 'ignored' && f.score >= INVESTIGATE_THRESHOLD
+        const sets = ['updated=?', 'title=?', 'detail=?', 'score=?', 'archived=0']
+        const params: any[] = [now, f.title, f.detail, f.score]
+        if (promote) sets.push("status='queued'", 'reason=NULL')
+        // keep a muted item's stated reason honest — "below threshold" would be a lie once the
+        // score rises and only the mute is holding it down
+        else if (muted && ex.status === 'ignored') { sets.push('reason=?'); params.push(f.reason ?? null) }
+        db.run(`UPDATE items SET ${sets.join(', ')} WHERE id=?`, [...params, ex.id])
         return 'existing'
       }
       db.run(
@@ -235,6 +261,69 @@ export function openStore(dbPath?: string) {
     },
     addCost(c: number) {
       store.metaSet('cost:' + dayKey(), String(store.costToday() + c))
+    },
+
+    /** Learned silences, oldest first (chips render in the order they were earned). */
+    mutes(): Mute[] {
+      return db.query<Mute, any>('SELECT * FROM mutes ORDER BY created ASC, kind ASC').all()
+    },
+
+    isMuted(repo: string, kind: string): boolean {
+      return !!db.query<any, any>('SELECT 1 FROM mutes WHERE repo=? AND kind=?').get(repo, kind)
+    },
+
+    /** False (and nothing stored) for 'blind' — blindness is never mutable, by anyone, from any
+     *  path. Enforced here at the store boundary so no caller can forget the rule. */
+    addMute(repo: string, kind: string, source: Mute['source']): boolean {
+      if (kind === 'blind') return false
+      const added = db.run(
+        'INSERT INTO mutes (repo, kind, created, source) VALUES (?,?,?,?) ON CONFLICT(repo, kind) DO NOTHING',
+        [repo, kind, Date.now(), source],
+      ).changes > 0
+      // A mute must immediately stop work already waiting in the queue, not merely affect findings
+      // first seen on a later cycle. Otherwise it can still spend an investigation after the user said no.
+      if (added) {
+        const reason = source === 'auto'
+          ? `muted — you've dismissed ${kind} in ${repo || 'alerts'} ${MUTE_THRESHOLD}×; unmute from the inbox`
+          : 'muted by you — unmute from the inbox'
+        db.run(
+          "UPDATE items SET status='ignored', reason=?, updated=? WHERE repo=? AND kind=? AND status='queued'",
+          [reason, Date.now(), repo, kind],
+        )
+      }
+      return true
+    },
+
+    /** Unmute + remember WHEN — only dismissals after this moment count toward re-muting,
+     *  so "I changed my mind" isn't instantly overruled by the old evidence. */
+    removeMute(repo: string, kind: string) {
+      db.run('DELETE FROM mutes WHERE repo=? AND kind=?', [repo, kind])
+      // un-lie the leftovers: ignored items still wearing a "muted" reason would point at a mute
+      // that no longer exists; the next cycle re-states the honest reason (or promotes outright)
+      db.run("UPDATE items SET reason=NULL, updated=? WHERE repo=? AND kind=? AND status='ignored' AND reason LIKE 'muted%'", [Date.now(), repo, kind])
+      store.metaSet(`unmuted:${repo}|${kind}`, String(Date.now()))
+    },
+
+    /** How many findings a mute is currently holding down (ignored rows wearing its reason) —
+     *  an active suppression must be visible at a glance, not discoverable by archaeology. */
+    mutedHolding(repo: string, kind: string): number {
+      return db.query<any, any>("SELECT COUNT(*) n FROM items WHERE repo=? AND kind=? AND status='ignored' AND reason LIKE 'muted%'").get(repo, kind)?.n ?? 0
+    },
+
+    /** Distinct findings of this (repo, kind) currently dismissed, counted since the last unmute. */
+    dismissCount(repo: string, kind: string): number {
+      const since = Number(store.metaGet(`unmuted:${repo}|${kind}`) ?? 0)
+      return db.query<any, any>("SELECT COUNT(*) n FROM items WHERE repo=? AND kind=? AND status='dismissed' AND updated>?").get(repo, kind, since)?.n ?? 0
+    },
+
+    /** Called on every human dismissal: the MUTE_THRESHOLDth distinct "no" on a (repo, kind)
+     *  earns a mute — except the sacred kinds (NEVER_AUTO_MUTE) and self-sense findings, where
+     *  routine dismissals must never accumulate into silence. */
+    maybeAutoMute(repo: string, kind: string, sense: string): boolean {
+      if (sense === 'self' || NEVER_AUTO_MUTE.has(kind)) return false
+      if (store.isMuted(repo, kind)) return false
+      if (store.dismissCount(repo, kind) < MUTE_THRESHOLD) return false
+      return store.addMute(repo, kind, 'auto')
     },
   }
   return store

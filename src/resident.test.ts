@@ -7,7 +7,7 @@ import { formatCheck, exitCode, type Check } from './doctor'
 import { estimateCost, extractCommand, extractMemoryUpdate, investigationPrompt, branchFor } from './hands'
 import { fileLogger } from './hygiene'
 import { scoreSentryIssue } from './senses'
-import { openStore, INVESTIGATE_THRESHOLD } from './store'
+import { openStore, INVESTIGATE_THRESHOLD, MUTE_THRESHOLD } from './store'
 
 const CFG: Config = { intervalMinutes: 15, budgets: { perCycle: 2, perDay: 10 }, urls: [], repos: [] }
 const REPO: RepoCfg = { path: '/x', name: 'r', commands: ['bun update', 'bun install', 'bun add'] }
@@ -201,6 +201,96 @@ describe('branchFor', () => {
   test('deterministic, slugged, length-capped', () => {
     expect(branchFor({ id: 7, title: 'PR #20 has merge conflicts — “Added plants”' })).toBe('resident/7-pr-20-has-merge-conflicts-added-plants')
     expect(branchFor({ id: 7, title: 'x'.repeat(100) }).length).toBeLessThanOrEqual('resident/7-'.length + 40)
+  })
+})
+
+// ---------------------------------------------------------------- dismissals teach (mutes)
+describe('dismissals teach', () => {
+  const dismiss = (s: any, hash: string, kind = 'stale-branches', repo = 'r', sense = 'git') => {
+    s.upsertFinding({ hash, sense, repo, kind, title: 't', detail: '', score: 60, status: 'queued' })
+    s.update(s.items(99).find((i: any) => i.hash === hash)!.id, { status: 'dismissed' })
+  }
+  test('the MUTE_THRESHOLDth distinct dismissal of a (repo, kind) earns an auto-mute — once', () => {
+    const s = openStore(':memory:')
+    dismiss(s, 'a'); expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(false)
+    dismiss(s, 'b'); expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(false)
+    dismiss(s, 'c'); expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(true)
+    expect(s.isMuted('r', 'stale-branches')).toBe(true)
+    expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(false) // already muted — never re-announces
+  })
+  test('dismissals only count within their own (repo, kind)', () => {
+    const s = openStore(':memory:')
+    dismiss(s, 'a', 'todos', 'r1')
+    dismiss(s, 'b', 'todos', 'r2')
+    dismiss(s, 'c', 'outdated', 'r1')
+    expect(s.maybeAutoMute('r1', 'todos', 'git')).toBe(false)
+  })
+  test('blindness never mutes, however often it is dismissed', () => {
+    const s = openStore(':memory:')
+    for (const h of ['a', 'b', 'c', 'd']) dismiss(s, h, 'blind', '', 'sentry')
+    expect(s.maybeAutoMute('', 'blind', 'sentry')).toBe(false)
+    expect(s.maybeAutoMute('', 'anything', 'self')).toBe(false)
+    expect(s.isMuted('', 'blind')).toBe(false)
+  })
+  test('sacred kinds never auto-mute: down and fatal stay loud however often dismissed', () => {
+    const s = openStore(':memory:')
+    for (const h of ['a', 'b', 'c', 'd']) dismiss(s, h, 'down', '', 'uptime')
+    expect(s.maybeAutoMute('', 'down', 'uptime')).toBe(false) // 3 dismissals must not disarm the 2am alarm
+    for (const h of ['e', 'f', 'g']) dismiss(s, h, 'fatal', 'r', 'sentry')
+    expect(s.maybeAutoMute('r', 'fatal', 'sentry')).toBe(false)
+    expect(s.addMute('', 'down', 'manual')).toBe(true) // explicit human intent is still allowed
+  })
+  test('blindness cannot be muted even explicitly — the store refuses from every path', () => {
+    const s = openStore(':memory:')
+    expect(s.addMute('', 'blind', 'manual')).toBe(false)
+    expect(s.isMuted('', 'blind')).toBe(false)
+  })
+  test('unmute clears the stale "muted" reasons it would otherwise leave lying', () => {
+    const s = openStore(':memory:')
+    s.addMute('r', 'k', 'manual')
+    s.upsertFinding({ hash: 'h', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 90, status: 'ignored', reason: 'muted by you — unmute from the inbox' }, true)
+    s.removeMute('r', 'k')
+    expect(s.items(1)[0].reason).toBeNull()
+  })
+  test('a mute reports how many findings it is currently holding down', () => {
+    const s = openStore(':memory:')
+    s.addMute('r', 'k', 'manual')
+    s.upsertFinding({ hash: 'h1', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 90, status: 'ignored', reason: 'muted by you — unmute from the inbox' }, true)
+    s.upsertFinding({ hash: 'h2', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 20, status: 'ignored', reason: 'below threshold (score 20)' })
+    expect(s.mutedHolding('r', 'k')).toBe(1) // only rows the mute is actually suppressing
+  })
+  test('unmute resets the evidence — only dismissals after it count toward re-muting', () => {
+    const s = openStore(':memory:')
+    for (const h of ['a', 'b', 'c']) dismiss(s, h)
+    s.maybeAutoMute('r', 'stale-branches', 'git')
+    s.removeMute('r', 'stale-branches')
+    expect(s.isMuted('r', 'stale-branches')).toBe(false)
+    expect(s.maybeAutoMute('r', 'stale-branches', 'git')).toBe(false) // the old 3 no longer count
+  })
+  test('manual mutes stick and duplicates keep the original', () => {
+    const s = openStore(':memory:')
+    s.addMute('r', 'todos', 'manual')
+    expect(s.isMuted('r', 'todos')).toBe(true)
+    s.addMute('r', 'todos', 'auto')
+    expect(s.mutes()).toHaveLength(1)
+    expect(s.mutes()[0].source).toBe('manual')
+  })
+  test('a new mute immediately suppresses matching queued work', () => {
+    const s = openStore(':memory:')
+    s.upsertFinding({ hash: 'queued', sense: 'git', repo: 'r', kind: 'todos', title: 't', detail: '', score: 60, status: 'queued' })
+    s.addMute('r', 'todos', 'manual')
+    const item = s.items(1)[0]
+    expect(item.status).toBe('ignored')
+    expect(item.reason).toBe('muted by you — unmute from the inbox')
+  })
+  test('a muted kind is never promoted back to queued by a high score — and its reason stays honest', () => {
+    const s = openStore(':memory:')
+    const f = { hash: 'h', sense: 'git', repo: 'r', kind: 'k', title: 't', detail: '', score: 20, status: 'ignored' as const, reason: 'below threshold (score 20)' }
+    s.upsertFinding(f)
+    s.upsertFinding({ ...f, score: 90, reason: 'muted — you dismissed this' }, true)
+    const it = s.items(10)[0]
+    expect(it.status).toBe('ignored')
+    expect(it.reason).toBe('muted — you dismissed this') // not the stale "below threshold" lie
   })
 })
 
