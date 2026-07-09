@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
 import { saveConfig, commandAllowed, applyModel, type Config } from './config'
-import type { Store } from './store'
+import { MAX_MEMORY_CHARS, type Store } from './store'
 import type { DaemonState } from './daemon'
 import { approve, applyCommand } from './hands'
 import { notify } from './notify'
@@ -68,6 +68,10 @@ export function startServer(deps: {
           intervalMinutes: cfg.intervalMinutes,
           watching: { repos: cfg.repos.map((r) => r.name), urls: cfg.urls },
           repoUrls,
+          memories: cfg.repos.map((r) => {
+            const memory = store.memory(r.name)
+            return { repo: r.name, notes: memory?.notes ?? '', updated: memory?.updated ?? null, revision: memory?.revision ?? null }
+          }),
           // tell the UI which proposed commands are runnable (allowlisted) without duplicating the rule client-side
           items: store.items(150).map((it) =>
             it.command ? { ...it, commandAllowed: commandAllowed(cfg.repos.find((r) => r.name === it.repo), it.command) } : it,
@@ -77,6 +81,27 @@ export function startServer(deps: {
 
       if (url.pathname === '/api/cycle' && req.method === 'POST') {
         deps.requestCycle()
+        return Response.json({ ok: true })
+      }
+
+      // Repository memory is intentionally a small, editable notebook rather than opaque model state.
+      if (url.pathname === '/api/memory' && req.method === 'POST') {
+        let body: any
+        try { body = await req.json() } catch { return Response.json({ ok: false, error: 'bad json' }, { status: 400 }) }
+        if (typeof body.repo !== 'string' || !cfg.repos.some((r) => r.name === body.repo))
+          return Response.json({ ok: false, error: 'unknown repo' }, { status: 400 })
+        if (typeof body.notes !== 'string') return Response.json({ ok: false, error: 'notes must be text' }, { status: 400 })
+        // An already-open inbox from before this endpoint gained revisions has no revision.
+        // Treat it as stale rather than allowing it to replace an existing notebook.
+        const revision = body.revision === undefined ? null : body.revision
+        if (revision !== null && (!Number.isInteger(revision) || revision < 1))
+          return Response.json({ ok: false, error: 'invalid memory revision' }, { status: 400 })
+        const saved = store.saveMemory(body.repo, body.notes, revision)
+        if (saved === 'too_large')
+          return Response.json({ ok: false, error: `memory is limited to ${MAX_MEMORY_CHARS.toLocaleString()} characters` }, { status: 400 })
+        if (saved === 'conflict')
+          return Response.json({ ok: false, error: 'Memory changed while you were editing. Your text is still here; copy it, reload the latest notes, then save again.' }, { status: 409 })
+        log(`↳ memory edited for ${body.repo}`)
         return Response.json({ ok: true })
       }
 

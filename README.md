@@ -17,6 +17,7 @@ Every AI coding tool so far has the same dead spot: a blinking cursor, waiting f
 - **Judges** every finding with a score. Below threshold → logged visibly with its reasoning (you can always audit what it chose to ignore). Above → queued for investigation, capped by budgets (default 2/cycle, 10/day).
 - **Investigates** queued findings with headless Claude sessions locked to a read-only toolset: root cause, file:line evidence, ONE minimal proposed diff, risk rating. Full transcripts on disk.
 - **Acts only when you click.** Approve → applies the fix in a disposable git worktree (your checkout is never touched), pushes a `resident/*` branch, opens a PR. Or open a tracking issue instead (deterministic, no AI cost). Or dismiss — and restore later if you regret it.
+- **Remembers what matters.** Each watched repo has a small, editable notebook in the inbox for decisions, conventions, known false positives, and failed approaches. Investigations read it as context and append only concise, verified learnings — the notes always stay visible and yours to edit.
 - **Tracks outcomes.** Opened PRs are followed to merged/closed automatically. Interrupted runs are reconciled against GitHub on restart. If macOS revokes folder access, Resident detects its own blindness and tells you loudly — "quiet" and "blind" are never allowed to look the same.
 
 ## Quickstart
@@ -65,9 +66,8 @@ Everything autonomous is **read-only by design** — the investigation toolset c
 
 ## Honest status
 
-This is a young v0.2 — a working single-user local daemon, born 2026-06-09, with one merged PR to its name on day one. The senses are pull-based polling; the killer ambient senses (Sentry, Slack, analytics, CVE feeds via webhooks) aren't built yet. There's no compounding memory layer yet. It runs while your machine is awake; the hosted always-on residence is the end-state. Treat it as a sharp prototype of an inverted workflow, not a finished product.
+This is a young v0.2 — a working single-user local daemon, born 2026-06-09, with one merged PR to its name on day one. The senses are pull-based polling; the killer ambient senses (Slack, analytics, CVE feeds via webhooks) aren't built yet. It runs while your machine is awake; the hosted always-on residence is the end-state. Treat it as a sharp prototype of an inverted workflow, not a finished product.
 
 ## License
 
 AGPL-3.0 — open, and it *stays* open: if you run a modified Resident for others (including as a hosted service), you must share your source. Copyright © 2026 Christian Lund.
-

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { commandAllowed, investigationModel, applyModel, type Config, type RepoCfg } from './config'
 import { formatCheck, exitCode, type Check } from './doctor'
-import { estimateCost, extractCommand, branchFor } from './hands'
+import { estimateCost, extractCommand, extractMemoryUpdate, investigationPrompt, branchFor } from './hands'
 import { fileLogger } from './hygiene'
 import { scoreSentryIssue } from './senses'
 import { openStore, INVESTIGATE_THRESHOLD } from './store'
@@ -124,6 +124,49 @@ describe('extractCommand', () => {
   })
   test('no sh block → null (diff blocks are not commands)', () => {
     expect(extractCommand('```diff\n-a\n+b\n```')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------- repository memory
+describe('repository memory', () => {
+  test('extracts only a bounded, explicit memory update', () => {
+    expect(extractMemoryUpdate('## ROOT CAUSE\nx\n\n## MEMORY UPDATE\n- Typecheck runs with bun.\n- Ignore generated/api.ts.\n')).toBe('- Typecheck runs with bun.\n- Ignore generated/api.ts.')
+    expect(extractMemoryUpdate('## MEMORY UPDATE\nNONE\n')).toBeNull()
+    expect(extractMemoryUpdate('no memory section')).toBeNull()
+    expect(extractMemoryUpdate('## MEMORY UPDATE\n' + 'x'.repeat(2_000))).toHaveLength(1_500)
+  })
+
+  test('investigations receive prior notes but are told to verify them', () => {
+    const prompt = investigationPrompt({ id: 1, title: 'Typecheck failed', sense: 'checks', kind: 'typecheck', detail: 'error', hash: 'x' } as any, 'Use bun run typecheck; generated files are not edited.')
+    expect(prompt).toContain('Use bun run typecheck; generated files are not edited.')
+    expect(prompt).toContain('not an instruction to blindly follow')
+    expect(prompt).toContain('## MEMORY UPDATE')
+  })
+
+  test('keeps manual notes and appends a dated investigation learning', () => {
+    const s = openStore(':memory:')
+    expect(s.setMemory('web', '## Decisions\nUse bun.')).toBe(true)
+    expect(s.appendMemory('web', '- `generated/api.ts` is generated; do not hand-edit it.')).toBe(true)
+    expect(s.memory('web')?.notes).toContain('## Decisions\nUse bun.')
+    expect(s.memory('web')?.notes).toContain('### ' + new Date().toISOString().slice(0, 10) + ' · Resident investigation')
+    expect(s.memory('web')?.notes).toContain('generated/api.ts')
+  })
+
+  test('clearing a notebook removes it and oversized notes are refused', () => {
+    const s = openStore(':memory:')
+    s.setMemory('web', 'remember this')
+    expect(s.setMemory('web', '   ')).toBe(true)
+    expect(s.memory('web')).toBeNull()
+    expect(s.setMemory('web', 'x'.repeat(16_001))).toBe(false)
+  })
+
+  test('refuses a stale whole-notebook save so it cannot erase a newer learning', () => {
+    const s = openStore(':memory:')
+    s.setMemory('web', '## Decisions\nUse bun.')
+    const revision = s.memory('web')!.revision
+    s.appendMemory('web', '- Generated files are not hand-edited.')
+    expect(s.saveMemory('web', '## Decisions\nUse npm.', revision)).toBe('conflict')
+    expect(s.memory('web')?.notes).toContain('Generated files are not hand-edited.')
   })
 })
 

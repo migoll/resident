@@ -140,9 +140,13 @@ export async function cycle(
       // tier when reconcile() requeues it (and a failed escalated dig retries escalated)
       store.update(item.id, { status: 'investigating', model, reason: null }) // clear stale queued/requeue reason
       store.bumpToday()
-      const res = await investigate(item, repo.path, model)
+      const res = await investigate(item, repo.path, model, store.memory(repo.name)?.notes ?? '')
       store.addCost(res.cost)
       if (res.ok) {
+        if (res.memory) {
+          if (store.appendMemory(repo.name, res.memory)) log(`    ↳ memory updated for ${repo.name}`)
+          else log(`    ↳ memory full for ${repo.name} — edit it in the inbox to make room`)
+        }
         store.update(item.id, { status: 'ready', evidence: res.evidence, patch: res.patch, command: res.command, cost: res.cost, escalate: 0 })
         const fix = res.patch ? 'fix proposed' : res.command ? `command proposed: ${res.command}` : 'no patch'
         log(`    → ready (${fix}, ${model}, $${res.cost.toFixed(2)})`)
