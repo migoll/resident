@@ -293,6 +293,18 @@ describe('maybeDigest', () => {
     expect(sent[0][2]).toContain('fix the thing')
     expect(sent[0][2]).toContain('$1.25')
   })
+  test('digest counts every ready item, not only the 150 newest inbox rows', () => {
+    const s = openStore(':memory:')
+    s.upsertFinding({ hash: 'ready-old', sense: 'git', repo: 'r', kind: 'k', title: 'older ready work', detail: '', score: 70, status: 'ready' })
+    const readyId = s.items(1)[0].id
+    s.db.run('UPDATE items SET updated=1 WHERE id=?', [readyId])
+    for (let i = 0; i < 151; i++)
+      s.upsertFinding({ hash: 'ignored-' + i, sense: 'git', repo: 'r', kind: 'k', title: 'recent activity', detail: '', score: 1, status: 'ignored' })
+    const sent: any[] = []
+    maybeDigest({ ...CFG, digest: '00:00' }, s, noLog, ((...a: any[]) => sent.push(a)) as any)
+    expect(sent[0][2]).toContain('1 ready for you')
+    expect(sent[0][2]).toContain('older ready work')
+  })
   test('no digest configured → never sends', () => {
     const s = openStore(':memory:')
     const sent: any[] = []

@@ -98,14 +98,15 @@ export function maybeDigest(cfg: Config, store: Store, log: (s: string) => void,
   const key = `digest:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   if (store.metaGet(key)) return
   store.metaSet(key, String(Date.now()))
-  const ready = store.items(150).filter((i) => i.status === 'ready')
+  const readyCount = store.readyCount()
+  const ready = store.ready(3)
   const queued = store.queued(99).length
   const lines = [
-    ready.length ? `${ready.length} ready for you${queued ? ` · ${queued} queued` : ''}` : `nothing needs you${queued ? ` — ${queued} queued` : ''}`,
-    ...ready.slice(0, 3).map((i) => `· ${i.title}${i.repo ? ` [${i.repo}]` : ''}`),
+    readyCount ? `${readyCount} ready for you${queued ? ` · ${queued} queued` : ''}` : `nothing needs you${queued ? ` — ${queued} queued` : ''}`,
+    ...ready.map((i) => `· ${i.title}${i.repo ? ` [${i.repo}]` : ''}`),
     `$${store.costToday().toFixed(2)} AI spend today · ${store.usedToday()} investigation(s)`,
   ]
-  log(`☉ digest sent (${ready.length} ready)`)
+  log(`☉ digest sent (${readyCount} ready)`)
   send(cfg, 'Resident: morning digest', lines.join('\n'), { force: true })
 }
 

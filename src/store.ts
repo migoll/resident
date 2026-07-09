@@ -103,6 +103,7 @@ export function openStore(dbPath?: string) {
     archived INTEGER NOT NULL DEFAULT 0
   )`)
   db.run(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
+  db.run('CREATE INDEX IF NOT EXISTS idx_items_status_updated ON items(status, archived, updated DESC)')
   db.run(`CREATE TABLE IF NOT EXISTS repo_memory (
     repo TEXT PRIMARY KEY,
     notes TEXT NOT NULL,
@@ -180,6 +181,18 @@ export function openStore(dbPath?: string) {
       return db
         .query<Item, any>("SELECT * FROM items WHERE status='queued' AND archived=0 ORDER BY score DESC, updated DESC LIMIT ?")
         .all(limit)
+    },
+
+    /** Exact ready count plus the newest entries for notification summaries. Unlike items(150),
+     * these queries cannot lose older ready work behind a busy activity feed. */
+    readyCount(): number {
+      return db.query<any, any>("SELECT COUNT(*) AS n FROM items WHERE status='ready' AND archived=0").get()?.n ?? 0
+    },
+
+    ready(limit: number): Pick<Item, 'title' | 'repo'>[] {
+      return db.query<Pick<Item, 'title' | 'repo'>, any>(
+        "SELECT title, repo FROM items WHERE status='ready' AND archived=0 ORDER BY updated DESC LIMIT ?",
+      ).all(limit)
     },
 
     /** Retention: hide items that settled into a terminal status more than `days` ago.
