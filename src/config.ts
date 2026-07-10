@@ -51,6 +51,10 @@ export interface Config {
   /** "HH:MM" — once a day, the first cycle at/after this time sends ONE summary ping
    *  (what's ready, what was spent) instead of Resident having pinged all night */
   digest?: string
+  /** Suppress ordinary notifications until turned off from the inbox; critical blind/down alerts still pierce it. */
+  silent?: boolean
+  /** Send a concise Monday morning outcome report. */
+  weeklySummary?: boolean
   urls: string[]
   repos: RepoCfg[]
 }

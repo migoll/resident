@@ -69,16 +69,16 @@ export function startServer(deps: {
           costToday: store.costToday(),
           budgets: cfg.budgets,
           intervalMinutes: cfg.intervalMinutes,
+          notifications: { silent: !!cfg.silent, quietHours: cfg.quietHours ?? null, digest: cfg.digest ?? null, weeklySummary: !!cfg.weeklySummary },
           watching: { repos: cfg.repos.map((r) => r.name), urls: cfg.urls },
           repoUrls,
+          authorities: store.authorities(),
           memories: cfg.repos.map((r) => {
             const memory = store.memory(r.name)
             return { repo: r.name, notes: memory?.notes ?? '', updated: memory?.updated ?? null, revision: memory?.revision ?? null }
           }),
           // tell the UI which proposed commands are runnable (allowlisted) without duplicating the rule client-side
-          items: store.items(150).map((it) =>
-            it.command ? { ...it, commandAllowed: commandAllowed(cfg.repos.find((r) => r.name === it.repo), it.command) } : it,
-          ),
+          items: store.items(150).map((it) => ({ ...it, duplicates: store.duplicatesFor(it.id).map((d) => ({ id: d.id, title: d.title, sense: d.sense, kind: d.kind })), ...(it.command ? { commandAllowed: commandAllowed(cfg.repos.find((r) => r.name === it.repo), it.command) } : {}) })),
           // each mute carries how many findings it is holding down right now — an active
           // suppression must be visible at a glance, not discoverable by archaeology
           mutes: store.mutes().map((m) => ({ ...m, holding: store.mutedHolding(m.repo, m.kind) })),
@@ -108,6 +108,23 @@ export function startServer(deps: {
       if (url.pathname === '/api/cycle' && req.method === 'POST') {
         deps.requestCycle()
         return Response.json({ ok: true })
+      }
+
+      if (url.pathname === '/api/notifications' && req.method === 'POST') {
+        let body: any
+        try { body = await req.json() } catch { return Response.json({ ok: false, error: 'bad json' }, { status: 400 }) }
+        if (typeof body.silent !== 'boolean' || typeof body.weeklySummary !== 'boolean') return Response.json({ ok: false, error: 'invalid notification settings' }, { status: 400 })
+        if (body.digest !== null && (typeof body.digest !== 'string' || !/^\d\d:\d\d$/.test(body.digest))) return Response.json({ ok: false, error: 'digest must be HH:MM or off' }, { status: 400 })
+        if (body.quietHours !== null && (!body.quietHours || !/^\d\d:\d\d$/.test(body.quietHours.start) || !/^\d\d:\d\d$/.test(body.quietHours.end) || body.quietHours.start === body.quietHours.end)) return Response.json({ ok: false, error: 'quiet hours need distinct HH:MM times' }, { status: 400 })
+        cfg.silent = body.silent; cfg.weeklySummary = body.weeklySummary; cfg.digest = body.digest ?? undefined; cfg.quietHours = body.quietHours ?? undefined
+        saveConfig(cfg); log(`↳ notifications: ${cfg.silent ? 'silent' : cfg.digest ? `digest ${cfg.digest}` : 'immediate'}`)
+        return Response.json({ ok: true })
+      }
+      if (url.pathname === '/api/autonomy' && req.method === 'POST') {
+        let body: any
+        try { body = await req.json() } catch { return Response.json({ ok: false, error: 'bad json' }, { status: 400 }) }
+        if (typeof body.repo !== 'string' || typeof body.kind !== 'string' || body.mode !== 'shadow' || !cfg.repos.some((r) => r.name === body.repo)) return Response.json({ ok: false, error: 'invalid authority' }, { status: 400 })
+        store.setAuthority(body.repo, body.kind, 'shadow'); log(`↳ autonomy revoked for ${body.repo}/${body.kind}`); return Response.json({ ok: true })
       }
 
       // Repository memory is intentionally a small, editable notebook rather than opaque model state.
@@ -170,11 +187,17 @@ export function startServer(deps: {
         return Response.json({ ok: true, repos: cfg.repos.map((r) => r.name), urls: cfg.urls })
       }
 
-      const m = url.pathname.match(/^\/api\/item\/(\d+)\/(dismiss|approve|restore|reinvestigate|issue)$/)
+      const m = url.pathname.match(/^\/api\/item\/(\d+)\/(dismiss|approve|restore|reinvestigate|issue|grant_autonomy)$/)
       if (m && req.method === 'POST') {
         const item = store.byId(Number(m[1]))
         if (!item) return Response.json({ ok: false, error: 'not found' }, { status: 404 })
         const action = m[2]
+
+        if (action === 'grant_autonomy') {
+          const mode = item.kind === 'grant-auto-pr' ? 'auto_pr' : item.kind === 'grant-auto-merge' ? 'auto_merge' : null
+          if (!mode || !item.target_kind || !cfg.repos.some((r) => r.name === item.repo)) return Response.json({ ok: false, error: 'invalid authority proposal' }, { status: 400 })
+          store.setAuthority(item.repo, item.target_kind, mode); store.update(item.id, { status: 'closed', reason: `${mode === 'auto_pr' ? 'auto-PR' : 'auto-merge'} authority granted by you` }); log(`↳ autonomy granted: ${item.repo}/${item.target_kind}`); return Response.json({ ok: true })
+        }
 
         if (action === 'dismiss') {
           store.update(item.id, { status: 'dismissed' })

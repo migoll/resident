@@ -16,6 +16,7 @@ export type ItemStatus =
   | 'tracked'       // issue opened
   | 'merged'        // PR merged — outcome reached
   | 'closed'        // PR/issue closed, or alert resolved
+  | 'deduped'       // represented by a canonical finding with the same root cause
 
 export interface Item {
   id: number
@@ -42,6 +43,9 @@ export interface Item {
   escalate: number
   /** 1 = aged out by retention — hidden from every view, kept as the audit trail */
   archived: number
+  dedupe_key: string | null
+  duplicate_of: number | null
+  target_kind: string | null
 }
 
 /** A human-editable, durable notebook for one watched repository. */
@@ -55,6 +59,9 @@ export interface RepoMemory {
 }
 
 export const MAX_MEMORY_CHARS = 16_000
+export type AuthorityMode = 'shadow' | 'auto_pr' | 'auto_merge'
+export interface Authority { repo: string; kind: string; mode: AuthorityMode; granted: number; updated: number }
+export interface Trust { repo: string; kind: string; accepted: number; dismissed: number; merged: number; total: number; rate: number }
 
 export interface Mute {
   repo: string // '' for repo-less kinds (uptime alerts)
@@ -100,7 +107,10 @@ export function openStore(dbPath?: string) {
     model TEXT,
     escalate INTEGER NOT NULL DEFAULT 0,
     command TEXT,
-    archived INTEGER NOT NULL DEFAULT 0
+    archived INTEGER NOT NULL DEFAULT 0,
+    dedupe_key TEXT,
+    duplicate_of INTEGER,
+    target_kind TEXT
   )`)
   db.run(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
   db.run('CREATE INDEX IF NOT EXISTS idx_items_status_updated ON items(status, archived, updated DESC)')
@@ -118,6 +128,10 @@ export function openStore(dbPath?: string) {
     source TEXT NOT NULL DEFAULT 'auto',
     PRIMARY KEY (repo, kind)
   )`)
+  db.run(`CREATE TABLE IF NOT EXISTS authorities (
+    repo TEXT NOT NULL, kind TEXT NOT NULL, mode TEXT NOT NULL, granted INTEGER NOT NULL, updated INTEGER NOT NULL,
+    PRIMARY KEY (repo, kind)
+  )`)
 
   // migrations for DBs created before these columns existed (no-op on fresh DBs — duplicate-column throws and is swallowed)
   for (const stmt of [
@@ -125,6 +139,9 @@ export function openStore(dbPath?: string) {
     'ALTER TABLE items ADD COLUMN escalate INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE items ADD COLUMN command TEXT',
     'ALTER TABLE items ADD COLUMN archived INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE items ADD COLUMN dedupe_key TEXT',
+    'ALTER TABLE items ADD COLUMN duplicate_of INTEGER',
+    'ALTER TABLE items ADD COLUMN target_kind TEXT',
     'ALTER TABLE repo_memory ADD COLUMN revision INTEGER NOT NULL DEFAULT 1',
   ]) {
     try { db.run(stmt) } catch {}
@@ -137,7 +154,7 @@ export function openStore(dbPath?: string) {
      *  title/detail/score; ignored items get promoted if they now score high. */
     upsertFinding(f: {
       hash: string; sense: string; repo: string; kind: string
-      title: string; detail: string; score: number; status: ItemStatus; reason?: string
+      title: string; detail: string; score: number; status: ItemStatus; reason?: string; target_kind?: string
     }, muted = false): 'new' | 'existing' {
       const now = Date.now()
       const ex = db.query<any, any>('SELECT id, status FROM items WHERE hash = ?').get(f.hash)
@@ -145,8 +162,8 @@ export function openStore(dbPath?: string) {
         // archived=0: a sense re-emitting the hash means the finding is back — retention must not hide a live problem
         // a muted kind never earns its way back to queued on score alone — that's what unmute is for
         const promote = !muted && ex.status === 'ignored' && f.score >= INVESTIGATE_THRESHOLD
-        const sets = ['updated=?', 'title=?', 'detail=?', 'score=?', 'archived=0']
-        const params: any[] = [now, f.title, f.detail, f.score]
+        const sets = ['updated=?', 'title=?', 'detail=?', 'score=?', 'target_kind=COALESCE(?,target_kind)', 'archived=0']
+        const params: any[] = [now, f.title, f.detail, f.score, f.target_kind ?? null]
         if (promote) sets.push("status='queued'", 'reason=NULL')
         // keep a muted item's stated reason honest — "below threshold" would be a lie once the
         // score rises and only the mute is holding it down
@@ -155,9 +172,9 @@ export function openStore(dbPath?: string) {
         return 'existing'
       }
       db.run(
-        `INSERT INTO items (created, updated, hash, sense, repo, kind, title, detail, score, status, reason)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [now, now, f.hash, f.sense, f.repo, f.kind, f.title, f.detail, f.score, f.status, f.reason ?? null],
+        `INSERT INTO items (created, updated, hash, sense, repo, kind, title, detail, score, status, reason, target_kind)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [now, now, f.hash, f.sense, f.repo, f.kind, f.title, f.detail, f.score, f.status, f.reason ?? null, f.target_kind ?? null],
       )
       return 'new'
     },
@@ -170,7 +187,7 @@ export function openStore(dbPath?: string) {
     },
 
     items(limit = 200): Item[] {
-      return db.query<Item, any>('SELECT * FROM items WHERE archived=0 ORDER BY updated DESC LIMIT ?').all(limit)
+      return db.query<Item, any>('SELECT * FROM items WHERE archived=0 AND duplicate_of IS NULL ORDER BY updated DESC LIMIT ?').all(limit)
     },
 
     byId(id: number): Item | null {
@@ -179,7 +196,7 @@ export function openStore(dbPath?: string) {
 
     queued(limit: number): Item[] {
       return db
-        .query<Item, any>("SELECT * FROM items WHERE status='queued' AND archived=0 ORDER BY score DESC, updated DESC LIMIT ?")
+        .query<Item, any>("SELECT * FROM items WHERE status='queued' AND archived=0 AND duplicate_of IS NULL ORDER BY score DESC, updated DESC LIMIT ?")
         .all(limit)
     },
 
@@ -200,13 +217,48 @@ export function openStore(dbPath?: string) {
     archiveOld(days: number): number {
       if (!days || days <= 0) return 0
       return db.run(
-        "UPDATE items SET archived=1 WHERE archived=0 AND status IN ('merged','closed','dismissed','failed','ignored') AND updated < ?",
+        "UPDATE items SET archived=1 WHERE archived=0 AND status IN ('merged','closed','dismissed','failed','ignored','deduped') AND updated < ?",
         [Date.now() - days * 86_400_000],
       ).changes
     },
 
     archivedCount(): number {
       return db.query<any, any>('SELECT COUNT(*) AS n FROM items WHERE archived=1').get()?.n ?? 0
+    },
+
+    dedupe(itemId: number, repo: string, key: string): number | null {
+      const clean = key.trim().toLowerCase().slice(0, 100)
+      if (!clean) return null
+      const canonical = db.query<any, any>("SELECT id FROM items WHERE repo=? AND dedupe_key=? AND duplicate_of IS NULL AND status IN ('queued','investigating','ready','approving','approved') AND id<>? ORDER BY created ASC LIMIT 1").get(repo, clean, itemId)
+      if (canonical) {
+        db.run("UPDATE items SET dedupe_key=?, duplicate_of=?, status='deduped', reason=?, updated=? WHERE id=?", [clean, canonical.id, `same root cause as finding #${canonical.id}`, Date.now(), itemId])
+        return canonical.id
+      }
+      db.run('UPDATE items SET dedupe_key=?, updated=? WHERE id=?', [clean, Date.now(), itemId])
+      return null
+    },
+
+    duplicatesFor(itemId: number): Item[] {
+      return db.query<Item, any>('SELECT * FROM items WHERE duplicate_of=? ORDER BY created ASC').all(itemId)
+    },
+
+    authority(repo: string, kind: string): AuthorityMode {
+      return db.query<Authority, any>('SELECT * FROM authorities WHERE repo=? AND kind=?').get(repo, kind)?.mode ?? 'shadow'
+    },
+    authorities(): Authority[] { return db.query<Authority, any>("SELECT * FROM authorities WHERE mode<>'shadow' ORDER BY repo,kind").all() },
+    setAuthority(repo: string, kind: string, mode: AuthorityMode) {
+      const now = Date.now()
+      db.run(`INSERT INTO authorities (repo,kind,mode,granted,updated) VALUES (?,?,?,?,?) ON CONFLICT(repo,kind) DO UPDATE SET mode=excluded.mode,updated=excluded.updated`, [repo, kind, mode, now, now])
+    },
+    trust(): Trust[] {
+      return db.query<any, any>(`SELECT repo,kind,SUM(CASE WHEN status IN ('approved','merged','closed') THEN 1 ELSE 0 END) accepted,SUM(CASE WHEN status='dismissed' THEN 1 ELSE 0 END) dismissed,SUM(CASE WHEN status='merged' THEN 1 ELSE 0 END) merged FROM items WHERE repo<>'' AND sense<>'autonomy' AND duplicate_of IS NULL AND (patch IS NOT NULL OR command IS NOT NULL) AND status IN ('approved','merged','closed','dismissed') GROUP BY repo,kind`).all().map((r) => {
+        const accepted = Number(r.accepted), dismissed = Number(r.dismissed), merged = Number(r.merged), total = accepted + dismissed
+        return { repo: r.repo, kind: r.kind, accepted, dismissed, merged, total, rate: total ? accepted / total : 0 }
+      })
+    },
+    outcomesSince(since: number) {
+      const r = db.query<any, any>("SELECT SUM(CASE WHEN status='merged' THEN 1 ELSE 0 END) merged,SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END) closed,SUM(CASE WHEN reason LIKE 'auto-PR%' THEN 1 ELSE 0 END) autoPr FROM items WHERE updated>=?").get(since) ?? {}
+      return { merged: Number(r.merged ?? 0), closed: Number(r.closed ?? 0), autoPr: Number(r.autoPr ?? 0) }
     },
 
     /** The repository notebook. Empty means no saved memory yet. */
