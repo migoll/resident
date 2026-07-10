@@ -18,6 +18,9 @@ Every AI coding tool so far has the same dead spot: a blinking cursor, waiting f
 - **Investigates** queued findings with headless Claude sessions locked to a read-only toolset: root cause, file:line evidence, ONE minimal proposed diff, risk rating. Full transcripts on disk.
 - **Acts only when you click.** Approve → applies the fix in a disposable git worktree (your checkout is never touched), pushes a `resident/*` branch, opens a PR. Or open a tracking issue instead (deterministic, no AI cost). Or dismiss — and restore later if you regret it.
 - **Remembers what matters.** Each watched repo has a small, editable notebook in the inbox for decisions, conventions, known false positives, and failed approaches. Investigations read it as context and append only concise, verified learnings — the notes always stay visible and yours to edit.
+- **Earns authority slowly.** After at least 3 accepted decisions at an 80% rate for a repo/kind, Resident may ask you to grant auto-PR authority. It will then act only on small (≤40 changed lines, ≤2 files), model-rated low-risk diffs. Auto-merge needs a separate, stricter grant (6 decisions, 90% accepted, 3 merged PRs) and still requires green checks plus GitHub-confirmed mergeability. Every grant is an inbox item; every active grant is visible and revocable there.
+- **Knows when to shut up.** Choose immediate delivery, a 09:00 morning digest, or Silent from the inbox; Silent is explicitly reversible. Optional quiet hours batch ordinary notifications into one after-hours digest, while blindness and outage alerts still arrive immediately. A Monday summary can report what merged, closed, and auto-opened that week.
+- **Collapses related noise.** Investigations provide a stable root-cause key, so multiple signals for the same underlying issue become one canonical inbox card with the related signals still visible for audit.
 - **Tracks outcomes.** Opened PRs are followed to merged/closed automatically. Interrupted runs are reconciled against GitHub on restart. If macOS revokes folder access, Resident detects its own blindness and tells you loudly — "quiet" and "blind" are never allowed to look the same.
 
 ## Quickstart
@@ -38,7 +41,7 @@ resident install # or: run permanently via launchd — starts at login, restarts
 
 If anything misbehaves, `resident doctor` checks every dependency — bun/git/claude/gh auth, config, repo folder access (the macOS TCC trap), the db, the daemon, Sentry token, notify URL — and prints a fix hint per failure (exit 1 if something's truly broken).
 
-Config lives in `~/.resident/config.json`: repos, watched URLs, cycle interval, budgets, and optional `"notify"` — point it at an [ntfy](https://ntfy.sh) topic URL or a Slack incoming webhook and Resident pings your phone when something's ready for you, when a PR opens, or when a site goes down. State in `~/.resident/resident.db`, investigation transcripts in `~/.resident/runs/`. The watchlist is also editable from the inbox itself (the chips row).
+Config lives in `~/.resident/config.json`: repos, watched URLs, cycle interval, budgets, and optional `"notify"` — point it at an [ntfy](https://ntfy.sh) topic URL or a Slack incoming webhook and Resident pings your phone when something's ready for you, when a PR opens, or when a site goes down. State in `~/.resident/resident.db`, investigation transcripts in `~/.resident/runs/`. The watchlist, notification rhythm, and per-repo authority are editable from the inbox. Notification defaults are immediate; set `"noise": { "mode": "morning_digest", "quietHours": { "start": "22:00", "end": "08:00" }, "weeklySummary": true }` for a quieter schedule, or choose Silent in the inbox and turn it off there later.
 
 Got [Sentry](https://sentry.io)? Add `"sentry": { "org": "your-org", "token": "sntryu_..." }` (a Personal Token with `event:read` + `project:read` + `org:read` — the free tier is enough) and Resident polls for fresh production errors every cycle: new and regressed issues get investigated like any other finding, and if a Sentry project slug matches a watched repo's name, the investigation digs through that codebase. Old, ongoing errors are deliberately kept below the investigation threshold — visible in the activity feed, never an alarm.
 
@@ -62,7 +65,7 @@ Notes for laptop-as-server: keep it on power and enable *Prevent automatic sleep
 
 ## The authority model
 
-Everything autonomous is **read-only by design** — the investigation toolset cannot write. Writes happen only on a human click, and even then on a disposable worktree branch, never your checkout, never `main`. Budgets cap the AI spend per cycle and per day; the inbox header shows running usage. Graduated autonomy (auto-merge for trivial, well-tested classes of fix) is on the roadmap, gated behind trust earned per repo — not a default.
+Everything autonomous is **read-only by design** until you explicitly grant earned authority — the investigation toolset cannot write. Default shadow mode requires a human click, and every write happens on a disposable worktree branch, never your checkout, never `main`. The only exception is a repo/kind authority grant you approve in the inbox after its observed acceptance history qualifies; its auto-PR and auto-merge guards are intentionally narrow and can be revoked at once. Budgets cap the AI spend per cycle and per day; the inbox header shows running usage.
 
 ## Honest status
 

@@ -4,10 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { commandAllowed, investigationModel, applyModel, type Config, type RepoCfg } from './config'
 import { formatCheck, exitCode, type Check } from './doctor'
-import { estimateCost, extractCommand, extractMemoryUpdate, investigationPrompt, branchFor } from './hands'
+import { estimateCost, extractCommand, extractMemoryUpdate, extractRootCauseKey, investigationPrompt, branchFor } from './hands'
 import { fileLogger } from './hygiene'
 import { scoreSentryIssue } from './senses'
 import { openStore, INVESTIGATE_THRESHOLD } from './store'
+import { autonomyProposal, autoPrEligible, type DaemonState } from './daemon'
+import { deliver, flushNoise, inQuietHours } from './noise'
+import { startServer } from './server'
 
 const CFG: Config = { intervalMinutes: 15, budgets: { perCycle: 2, perDay: 10 }, urls: [], repos: [] }
 const REPO: RepoCfg = { path: '/x', name: 'r', commands: ['bun update', 'bun install', 'bun add'] }
@@ -125,6 +128,134 @@ describe('extractCommand', () => {
   test('no sh block → null (diff blocks are not commands)', () => {
     expect(extractCommand('```diff\n-a\n+b\n```')).toBeNull()
   })
+})
+
+describe('extractRootCauseKey', () => {
+  test('normalizes only the explicit canonical root-cause label', () => {
+    expect(extractRootCauseKey('## ROOT CAUSE\ntext\n\n## ROOT CAUSE KEY\nStale generated API client\n\n## EVIDENCE\nx')).toBe('stale generated api client')
+    expect(extractRootCauseKey('## ROOT CAUSE KEY\nNONE')).toBeNull()
+    expect(extractRootCauseKey('## ROOT CAUSE\nx')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------- autonomy / noise / dedupe
+describe('earned autonomy', () => {
+  const lowRisk = { patch: '--- a/a.ts\n+++ b/a.ts\n-old\n+new', command: null, evidence: '## RISK\nlow — one safe line' }
+
+  test('auto-PR accepts only small, low-risk diffs—not commands or medium-risk work', () => {
+    expect(autoPrEligible(lowRisk)).toBe(true)
+    expect(autoPrEligible({ ...lowRisk, command: 'bun update x' })).toBe(false)
+    expect(autoPrEligible({ ...lowRisk, evidence: '## RISK\nmedium — needs review' })).toBe(false)
+    expect(autoPrEligible({ ...lowRisk, patch: '--- a/a\n+++ b/a\n' + Array.from({ length: 41 }, (_, i) => `-${i}\n+${i}`).join('\n') })).toBe(false)
+  })
+
+  test('requires an earned grant for each authority step', () => {
+    const s = openStore(':memory:')
+    expect(autonomyProposal(s, { repo: 'web', kind: 'typecheck', accepted: 2, dismissed: 0, merged: 2, total: 2, rate: 1 })).toBeNull()
+    expect(autonomyProposal(s, { repo: 'web', kind: 'typecheck', accepted: 3, dismissed: 0, merged: 2, total: 3, rate: 1 })).toBe('auto_pr')
+    s.setAuthority('web', 'typecheck', 'auto_pr')
+    expect(autonomyProposal(s, { repo: 'web', kind: 'typecheck', accepted: 5, dismissed: 0, merged: 3, total: 5, rate: 1 })).toBeNull()
+    expect(autonomyProposal(s, { repo: 'web', kind: 'typecheck', accepted: 6, dismissed: 0, merged: 3, total: 6, rate: 1 })).toBe('auto_merge')
+    expect(autonomyProposal(s, { repo: 'web', kind: 'typecheck', accepted: 6, dismissed: 1, merged: 4, total: 7, rate: 6 / 7 })).toBeNull()
+  })
+
+  test('derives trust from actual human-approved and dismissed fix outcomes', () => {
+    const s = openStore(':memory:')
+    for (const [hash, status] of [['a', 'merged'], ['b', 'approved'], ['c', 'dismissed']] as const) {
+      s.upsertFinding({ hash, sense: 'checks', repo: 'web', kind: 'typecheck', title: hash, detail: '', score: 80, status: 'ready' })
+      const item = s.items(10).find((candidate) => candidate.hash === hash)!
+      s.update(item.id, { patch: '--- a/a\n+++ b/a\n-x\n+y', status })
+    }
+    expect(s.trust()).toEqual([{ repo: 'web', kind: 'typecheck', accepted: 2, dismissed: 1, merged: 1, total: 3, rate: 2 / 3 }])
+  })
+})
+
+describe('noise discipline', () => {
+  test('recognizes both same-day and overnight quiet hours', () => {
+    const c = (quietHours: { start: string; end: string }): Config => ({ ...CFG, noise: { quietHours } })
+    expect(inQuietHours(c({ start: '09:00', end: '17:00' }), new Date(2026, 0, 1, 12, 0))).toBe(true)
+    expect(inQuietHours(c({ start: '09:00', end: '17:00' }), new Date(2026, 0, 1, 18, 0))).toBe(false)
+    expect(inQuietHours(c({ start: '22:00', end: '08:00' }), new Date(2026, 0, 1, 23, 0))).toBe(true)
+    expect(inQuietHours(c({ start: '22:00', end: '08:00' }), new Date(2026, 0, 1, 9, 0))).toBe(false)
+  })
+
+  test('silent is reversible in config and critical alerts still deliver', async () => {
+    const s = openStore(':memory:')
+    const silent: Config = { ...CFG, noise: { mode: 'silent' } }
+    expect(await deliver(silent, s, 'routine', 'body')).toBe('silenced')
+    expect(s.pendingDeliveryCount()).toBe(0)
+    expect(await deliver(silent, s, 'blind', 'body', 'critical')).toBe('sent')
+    const immediate: Config = { ...CFG, noise: { mode: 'immediate' } }
+    expect(await deliver(immediate, s, 'routine again', 'body')).toBe('sent')
+  })
+
+  test('flushes queued notifications into one digest once quiet time has ended', async () => {
+    const s = openStore(':memory:')
+    s.recordDelivery('one', 'a', 'normal', 'pending')
+    s.recordDelivery('two', 'b', 'normal', 'pending')
+    await flushNoise({ ...CFG, noise: { mode: 'immediate' } }, s, () => {}, new Date(2026, 0, 1, 10, 0))
+    expect(s.pendingDeliveryCount()).toBe(0)
+    expect(s.db.query<any, any>("SELECT COUNT(*) AS n FROM deliveries WHERE status='sent'").get().n).toBe(2)
+  })
+})
+
+describe('semantic dedupe', () => {
+  test('keeps one canonical inbox item while retaining related signals for audit', () => {
+    const s = openStore(':memory:')
+    const add = (hash: string, title: string) => {
+      s.upsertFinding({ hash, sense: 'checks', repo: 'web', kind: 'typecheck', title, detail: '', score: 80, status: 'ready' })
+      return s.items(10).find((item) => item.hash === hash)!
+    }
+    const first = add('one', 'Typecheck fails in CI')
+    const second = add('two', 'Build cannot compile')
+    expect(s.dedupe(first.id, 'web', 'stale generated api client')).toBeNull()
+    expect(s.dedupe(second.id, 'web', 'stale generated api client')).toBe(first.id)
+    expect(s.items(10).map((item) => item.id)).toEqual([first.id])
+    expect(s.duplicatesFor(first.id)).toHaveLength(1)
+    expect(s.byId(second.id)).toMatchObject({ status: 'deduped', duplicate_of: first.id })
+  })
+})
+
+describe('autonomy and noise API', () => {
+  const state: DaemonState = { nextCycleAt: 0, cycling: false, lastCycle: null }
+
+  test('surfaces delivery settings and only permits authority revocation outside an earned proposal', async () => {
+    const store = openStore(':memory:')
+    const cfg: Config = { ...CFG, repos: [{ path: '/missing', name: 'web' }] }
+    const saved: Config[] = []
+    const server = startServer({ cfg, store, state, requestCycle: () => {}, log: () => {}, saveConfig: (next) => saved.push(structuredClone(next)), port: 0 })
+    const base = `http://127.0.0.1:${server.port}`
+    try {
+      const noise = await fetch(base + '/api/noise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'silent', quietHours: null, weeklySummary: true }) })
+      expect(noise.status).toBe(200)
+      expect(cfg.noise).toEqual({ mode: 'silent', weeklySummary: true })
+      expect(saved).toHaveLength(1)
+
+      store.setAuthority('web', 'typecheck', 'auto_pr')
+      const revoked = await fetch(base + '/api/autonomy', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repo: 'web', kind: 'typecheck', mode: 'shadow' }) })
+      expect(revoked.status).toBe(200)
+      expect(store.authority('web', 'typecheck')).toBe('shadow')
+
+      store.upsertFinding({ hash: 'grant', sense: 'autonomy', repo: 'web', kind: 'grant-auto-pr', target_kind: 'typecheck', title: 'Grant?', detail: '', score: 60, status: 'ready' })
+      const item = store.items(1)[0]
+      const granted = await fetch(base + `/api/item/${item.id}/grant_autonomy`, { method: 'POST' })
+      expect(granted.status).toBe(200)
+      expect(store.authority('web', 'typecheck')).toBe('auto_pr')
+
+      const snapshot = await (await fetch(base + '/api/state')).json()
+      expect(snapshot.noise.mode).toBe('silent')
+      expect(snapshot.authorities[0]).toMatchObject({ repo: 'web', kind: 'typecheck', mode: 'auto_pr' })
+    } finally {
+      server.stop()
+    }
+  })
+})
+
+test('the inbox inline script parses', () => {
+  const html = readFileSync(new URL('./ui/inbox.html', import.meta.url), 'utf8')
+  const script = html.match(/<script>\s*([\s\S]*?)<\/script>/)?.[1]
+  expect(script).toBeTruthy()
+  new Function(script!)
 })
 
 // ---------------------------------------------------------------- repository memory

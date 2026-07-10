@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
-import { saveConfig, commandAllowed, applyModel, type Config } from './config'
+import { saveConfig as persistConfig, commandAllowed, applyModel, type Config } from './config'
 import { MAX_MEMORY_CHARS, type Store } from './store'
 import type { DaemonState } from './daemon'
 import { approve, applyCommand } from './hands'
-import { notify } from './notify'
+import { deliver, noiseSettings, notificationMode, validClock } from './noise'
 
 export function startServer(deps: {
   cfg: Config
@@ -13,10 +13,16 @@ export function startServer(deps: {
   state: DaemonState
   requestCycle: () => void
   log: (s: string) => void
+  /** Injected by API tests; production always persists ~/.resident/config.json. */
+  saveConfig?: (cfg: Config) => void
+  /** `0` asks Bun for an ephemeral test port. */
+  port?: number
 }) {
   const { cfg, store, state, log } = deps
   const html = readFileSync(new URL('./ui/inbox.html', import.meta.url), 'utf8')
-  const port = Number(process.env.PORT) || 5117
+  const envPort = Number(process.env.PORT)
+  const port = deps.port ?? (Number.isFinite(envPort) && envPort > 0 ? envPort : 5117)
+  const saveConfig = deps.saveConfig ?? persistConfig
 
   // repo name → https://github.com/... (best-effort; retried while empty,
   // e.g. when folder access was denied at startup and granted later)
@@ -66,21 +72,54 @@ export function startServer(deps: {
           costToday: store.costToday(),
           budgets: cfg.budgets,
           intervalMinutes: cfg.intervalMinutes,
+          noise: { ...noiseSettings(cfg), pending: store.pendingDeliveryCount() },
           watching: { repos: cfg.repos.map((r) => r.name), urls: cfg.urls },
           repoUrls,
+          authorities: store.authorities(),
           memories: cfg.repos.map((r) => {
             const memory = store.memory(r.name)
             return { repo: r.name, notes: memory?.notes ?? '', updated: memory?.updated ?? null, revision: memory?.revision ?? null }
           }),
           // tell the UI which proposed commands are runnable (allowlisted) without duplicating the rule client-side
-          items: store.items(150).map((it) =>
-            it.command ? { ...it, commandAllowed: commandAllowed(cfg.repos.find((r) => r.name === it.repo), it.command) } : it,
-          ),
+          items: store.items(150).map((it) => ({
+            ...it,
+            duplicates: store.duplicatesFor(it.id).map((duplicate) => ({ id: duplicate.id, title: duplicate.title, sense: duplicate.sense, kind: duplicate.kind })),
+            ...(it.command ? { commandAllowed: commandAllowed(cfg.repos.find((r) => r.name === it.repo), it.command) } : {}),
+          })),
         })
       }
 
       if (url.pathname === '/api/cycle' && req.method === 'POST') {
         deps.requestCycle()
+        return Response.json({ ok: true })
+      }
+
+      if (url.pathname === '/api/noise' && req.method === 'POST') {
+        let body: any
+        try { body = await req.json() } catch { return Response.json({ ok: false, error: 'bad json' }, { status: 400 }) }
+        if (!notificationMode(body.mode)) return Response.json({ ok: false, error: 'invalid delivery mode' }, { status: 400 })
+        if (typeof body.weeklySummary !== 'boolean') return Response.json({ ok: false, error: 'weeklySummary must be true or false' }, { status: 400 })
+        let quietHours: { start: string; end: string } | undefined
+        if (body.quietHours !== null && body.quietHours !== undefined) {
+          if (!body.quietHours || !validClock(body.quietHours.start) || !validClock(body.quietHours.end) || body.quietHours.start === body.quietHours.end)
+            return Response.json({ ok: false, error: 'quiet hours need distinct HH:MM start and end times' }, { status: 400 })
+          quietHours = { start: body.quietHours.start, end: body.quietHours.end }
+        }
+        cfg.noise = { mode: body.mode, weeklySummary: body.weeklySummary, ...(quietHours ? { quietHours } : {}) }
+        saveConfig(cfg)
+        log(`↳ notification rhythm: ${cfg.noise.mode}${quietHours ? ` · quiet ${quietHours.start}–${quietHours.end}` : ''}`)
+        return Response.json({ ok: true, noise: noiseSettings(cfg) })
+      }
+
+      // Authority can only be reduced here. Higher modes are earned and granted by approving an inbox item.
+      if (url.pathname === '/api/autonomy' && req.method === 'POST') {
+        let body: any
+        try { body = await req.json() } catch { return Response.json({ ok: false, error: 'bad json' }, { status: 400 }) }
+        if (typeof body.repo !== 'string' || typeof body.kind !== 'string' || !cfg.repos.some((r) => r.name === body.repo))
+          return Response.json({ ok: false, error: 'unknown authority' }, { status: 400 })
+        if (body.mode !== 'shadow') return Response.json({ ok: false, error: 'authority can only be revoked here' }, { status: 400 })
+        store.setAuthority(body.repo, body.kind, 'shadow')
+        log(`↳ autonomy revoked for ${body.repo}/${body.kind}`)
         return Response.json({ ok: true })
       }
 
@@ -144,11 +183,21 @@ export function startServer(deps: {
         return Response.json({ ok: true, repos: cfg.repos.map((r) => r.name), urls: cfg.urls })
       }
 
-      const m = url.pathname.match(/^\/api\/item\/(\d+)\/(dismiss|approve|restore|reinvestigate|issue)$/)
+      const m = url.pathname.match(/^\/api\/item\/(\d+)\/(dismiss|approve|restore|reinvestigate|issue|grant_autonomy)$/)
       if (m && req.method === 'POST') {
         const item = store.byId(Number(m[1]))
         if (!item) return Response.json({ ok: false, error: 'not found' }, { status: 404 })
         const action = m[2]
+
+        if (action === 'grant_autonomy') {
+          const mode = item.kind === 'grant-auto-pr' ? 'auto_pr' : item.kind === 'grant-auto-merge' ? 'auto_merge' : null
+          if (!mode || !item.target_kind || !cfg.repos.some((r) => r.name === item.repo))
+            return Response.json({ ok: false, error: 'invalid authority proposal' }, { status: 400 })
+          store.setAuthority(item.repo, item.target_kind, mode)
+          store.update(item.id, { status: 'closed', reason: `${mode === 'auto_pr' ? 'auto-PR' : 'auto-merge'} authority granted by you` })
+          log(`↳ autonomy granted: ${item.repo}/${item.target_kind} → ${mode}`)
+          return Response.json({ ok: true })
+        }
 
         if (action === 'dismiss') {
           store.update(item.id, { status: 'dismissed' })
@@ -219,14 +268,14 @@ export function startServer(deps: {
           if (res.ok) {
             store.update(item.id, { status: 'approved', pr_url: res.pr_url, cost: item.cost + res.cost })
             log(`  → ${res.pr_url}`)
-            notify(cfg, 'Resident: PR opened', `${item.title}\n${res.pr_url}`)
+            await deliver(cfg, store, 'Resident: PR opened', `${item.title}\n${res.pr_url}`)
           } else {
             const noChanges = (res as any).noChanges
             // a command that changed nothing isn't a failure — surface it as ready with the explanation.
             // cost lands on the item either way (a failed AI approve still spent real money)
             store.update(item.id, { status: noChanges ? 'ready' : 'failed', cost: item.cost + res.cost, reason: noChanges ? 'command ran but produced no changes' : 'apply/PR failed — see runs log' })
             log(`  → ${noChanges ? 'command: no changes' : 'approve failed'}`)
-            if (!noChanges) notify(cfg, 'Resident: approve failed', item.title)
+            if (!noChanges) await deliver(cfg, store, 'Resident: approve failed', item.title)
           }
         })()
         return Response.json({ ok: true })

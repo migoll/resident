@@ -72,6 +72,14 @@ export function extractMemoryUpdate(text: string): string | null {
   return update.slice(0, 1_500).trim()
 }
 
+/** A model-supplied canonical label lets related signals collapse without pretending keyword matching is semantic. */
+export function extractRootCauseKey(text: string): string | null {
+  const raw = text.match(/## ROOT CAUSE KEY\s*\n([^\n#]*)/i)?.[1]?.trim() ?? ''
+  if (!raw || /^none\.?$/i.test(raw)) return null
+  const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+  return key ? key.slice(0, 100) : null
+}
+
 /** Best-effort default base ref for a new branch: origin's default → origin/main|master → current local branch. */
 async function defaultBase(repoPath: string, hasRemote: boolean): Promise<string> {
   if (hasRemote) {
@@ -117,6 +125,9 @@ Investigate the real situation in this codebase (read files, git history, gh, et
 ## ROOT CAUSE
 2–4 sentences. Name specific files and lines.
 
+## ROOT CAUSE KEY
+A stable 2–6 word lowercase label for this underlying cause (for example, \`stale generated API client\`). Use the same label for different symptoms of the same cause; write \`NONE\` only when there is no shared cause.
+
 ## EVIDENCE
 Bullet list of file:line references, each with a one-line explanation.
 
@@ -145,6 +156,7 @@ export async function investigate(item: Item, repoPath: string, model?: string, 
   return {
     ok: res.ok, evidence: res.text, patch, command: patch ? null : extractCommand(res.text),
     memory: res.ok ? extractMemoryUpdate(res.text) : null,
+    rootCauseKey: res.ok ? extractRootCauseKey(res.text) : null,
     cost: res.cost, costEstimated: res.costEstimated,
   }
 }

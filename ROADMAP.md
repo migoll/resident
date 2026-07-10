@@ -75,12 +75,12 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
       before digging and write back after. Surfaced + editable in the inbox.
 - [ ] **Dismissals teach**: repeated dismissal of a kind/repo dampens its score automatically
       ("you've dismissed stale-branches in tierflix 3× → auto-ignore, reversible in settings")
-- [ ] **Graduated autonomy**: per-repo, per-kind authority earned from accept-rate —
+- [x] **Graduated autonomy**: per-repo, per-kind authority earned from accept-rate —
       shadow → auto-PR (no click) → auto-merge (trivial classes, CI-green, small diffs only).
       Authority changes are themselves inbox items you approve.
-- [ ] **Noise discipline**: morning digest mode, quiet hours, weekly "what I did" summary —
+- [x] **Noise discipline**: morning digest mode, quiet hours, weekly "what I did" summary —
       Dependabot fatigue is the named enemy; silence > spam, always
-- [ ] **Semantic dedupe**: same root cause across findings collapses into one item
+- [x] **Semantic dedupe**: same root cause across findings collapses into one item
 
 ## Phase 3 — Second user, then a team
 
@@ -173,3 +173,9 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   in the inbox for decisions, conventions, known false positives, and failed approaches. Every
   investigation receives that context, is asked for a small verified memory update, and appends it
   after a successful dig; notes remain visible and editable rather than becoming opaque model state.
+- 2026-07-10 — Phase 2 trust + quiet: authority now progresses per repo/kind only through inbox
+  grants earned from actual acceptance history (shadow → bounded low-risk auto-PR → CI-green
+  auto-merge); grants are revocable. The inbox controls immediate, morning-digest, or reversible
+  Silent delivery, optional quiet hours, and a Monday outcome report; critical blind/outage alerts
+  remain loud. Investigations emit a canonical root-cause key so related signals collapse into one
+  auditable card rather than competing for attention.

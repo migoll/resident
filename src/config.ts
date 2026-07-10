@@ -25,6 +25,17 @@ export interface SentryCfg {
   url?: string
 }
 
+export type NotificationMode = 'immediate' | 'morning_digest' | 'silent'
+
+export interface NoiseCfg {
+  /** immediate by default; silent is deliberately reversible from the inbox */
+  mode?: NotificationMode
+  /** Local-time window for ordinary notifications, e.g. { start: "22:00", end: "08:00" }. */
+  quietHours?: { start: string; end: string }
+  /** Send a compact Monday-morning account of resolved work. */
+  weeklySummary?: boolean
+}
+
 export interface Config {
   intervalMinutes: number
   budgets: { perCycle: number; perDay: number }
@@ -43,6 +54,8 @@ export interface Config {
   bind?: string
   /** push endpoint: an ntfy topic URL (e.g. https://ntfy.sh/your-secret-topic) or a Slack incoming webhook */
   notify?: string
+  /** delivery rhythm for non-critical push notifications */
+  noise?: NoiseCfg
   urls: string[]
   repos: RepoCfg[]
 }
