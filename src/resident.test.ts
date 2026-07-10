@@ -224,7 +224,7 @@ describe('scoreSentryIssue', () => {
 
 // ---------------------------------------------------------------- noise discipline
 import { hm, inQuietHours, notify } from './notify'
-import { maybeDigest } from './daemon'
+import { maybeDigest, maybeWeeklySummary } from './daemon'
 
 describe('quiet hours', () => {
   const at = (h: number, m = 0) => new Date(2026, 5, 13, h, m)
@@ -290,6 +290,23 @@ describe('notify quiet-hours policy', () => {
   })
 })
 
+describe('reversible Silent mode', () => {
+  test('suppresses ordinary pings but never a critical alarm', async () => {
+    const calls: unknown[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (...args: any[]) => { calls.push(args); return new Response('') }) as any
+    try {
+      const cfg: Config = { ...CFG, notify: 'https://ntfy.example/topic', silent: true }
+      await notify(cfg, 'routine', 'quiet')
+      await notify(cfg, 'blind', 'loud', { critical: true })
+      expect(calls).toHaveLength(1)
+      cfg.silent = false // this is the inbox's "turn Silent off" state
+      await notify(cfg, 'routine again', 'delivered')
+      expect(calls).toHaveLength(2)
+    } finally { globalThis.fetch = realFetch }
+  })
+})
+
 describe('maybeDigest', () => {
   const noLog = () => {}
   test('sends once per day, only at/after the configured time, with force', () => {
@@ -337,6 +354,16 @@ describe('maybeDigest', () => {
     maybeDigest(CFG, s, noLog, ((...a: any[]) => sent.push(a)) as any)
     expect(sent.length).toBe(0)
   })
+})
+
+test('weekly report is Monday-only, once per week, and respects Silent', () => {
+  const store = openStore(':memory:')
+  const monday = new Date(2026, 5, 15, 9, 0)
+  maybeWeeklySummary({ ...CFG, weeklySummary: true }, store, () => {}, monday)
+  expect(store.metaGet('weekly:2026-23')).toBeTruthy()
+  const silent = openStore(':memory:')
+  maybeWeeklySummary({ ...CFG, weeklySummary: true, silent: true }, silent, () => {}, monday)
+  expect(silent.metaGet('weekly:2026-23')).toBeNull()
 })
 
 // ---------------------------------------------------------------- branch naming
