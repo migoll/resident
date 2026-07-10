@@ -1,11 +1,11 @@
 import { readdirSync } from 'node:fs'
-import { investigationModel, type Config } from './config'
+import { applyModel, investigationModel, type Config } from './config'
 import { maybeRotateLog } from './hygiene'
 import { run } from './proc'
 import { runSenses } from './senses'
-import { investigate, branchFor } from './hands'
+import { investigate, branchFor, approve } from './hands'
 import { notify, hm } from './notify'
-import { INVESTIGATE_THRESHOLD, MUTE_THRESHOLD, type Store } from './store'
+import { INVESTIGATE_THRESHOLD, MUTE_THRESHOLD, type Item, type Store, type Trust } from './store'
 
 export interface DaemonState {
   nextCycleAt: number
@@ -46,7 +46,28 @@ export async function reconcile(cfg: Config, store: Store, log: (s: string) => v
 /** Track outcomes after our part is done: PRs get merged/closed by humans,
  *  issues get closed — the inbox should reflect reality without being told.
  *  Async on purpose: spawnSync here would freeze the inbox server it shares a process with. */
-export async function refreshOutcomes(store: Store, log: (s: string) => void) {
+export function autoPrEligible(item: Pick<Item, 'patch' | 'command' | 'evidence'>): boolean {
+  if (!item.patch || item.command) return false
+  const changed = item.patch.split('\n').filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line)).length
+  const files = new Set(item.patch.split('\n').filter((line) => /^\+\+\+ /.test(line)).map((line) => line.slice(4))).size
+  return changed > 0 && changed <= 40 && files <= 2 && /## RISK\s*\n\s*low\b/i.test(item.evidence ?? '')
+}
+function checksGreen(checks: any) { return Array.isArray(checks) && checks.length > 0 && checks.every((c) => ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(c?.conclusion)) }
+async function maybeAutoMerge(cfg: Config, store: Store, item: Item, log: (s: string) => void) {
+  if (store.authority(item.repo, item.kind) !== 'auto_merge' || !autoPrEligible(item)) return false
+  try {
+    const view = await run(['gh', 'pr', 'view', item.pr_url!, '--json', 'state,mergeable,statusCheckRollup'])
+    if (!view.ok) return false
+    const pr = JSON.parse(view.stdout)
+    if (pr.state === 'MERGED') { store.update(item.id, { status: 'merged', reason: 'PR merged' }); return true }
+    if (pr.state === 'CLOSED' || pr.mergeable !== 'MERGEABLE' || !checksGreen(pr.statusCheckRollup)) return false
+    if (!(await run(['gh', 'pr', 'merge', item.pr_url!, '--squash', '--delete-branch'], undefined, 120_000)).ok) return false
+    const after = await run(['gh', 'pr', 'view', item.pr_url!, '--json', 'state'])
+    if (after.ok && JSON.parse(after.stdout).state === 'MERGED') { store.update(item.id, { status: 'merged', reason: 'auto-merged under earned authority (small low-risk diff, CI green)' }); notify(cfg, 'Resident: auto-merged', `${item.title}\n${item.pr_url}`); log(`  ✓ auto-merged: ${item.title}`); return true }
+  } catch {}
+  return false
+}
+export async function refreshOutcomes(cfg: Config, store: Store, log: (s: string) => void) {
   for (const it of store.items(300)) {
     if (!it.pr_url?.startsWith('https://github.com')) continue
     try {
@@ -56,12 +77,36 @@ export async function refreshOutcomes(store: Store, log: (s: string) => void) {
         const st = JSON.parse(r.stdout).state
         if (st === 'MERGED') { store.update(it.id, { status: 'merged', reason: 'PR merged' }); log(`  ✓ merged: ${it.title}`) }
         else if (st === 'CLOSED') store.update(it.id, { status: 'closed', reason: 'PR closed without merging' })
+        else await maybeAutoMerge(cfg, store, it, log)
       } else if (it.status === 'tracked') {
         const r = await run(['gh', 'issue', 'view', it.pr_url, '--json', 'state'])
         if (r.ok && JSON.parse(r.stdout).state === 'CLOSED') store.update(it.id, { status: 'closed', reason: 'issue closed' })
       }
     } catch {}
   }
+}
+
+export function autonomyProposal(store: Store, trust: Trust): 'auto_pr' | 'auto_merge' | null {
+  const current = store.authority(trust.repo, trust.kind)
+  if (current === 'shadow' && trust.total >= 3 && trust.rate >= 0.8) return 'auto_pr'
+  if (current === 'auto_pr' && trust.total >= 6 && trust.merged >= 3 && trust.rate >= 0.9) return 'auto_merge'
+  return null
+}
+function proposeAutonomy(store: Store) {
+  for (const trust of store.trust()) {
+    const mode = autonomyProposal(store, trust); if (!mode) continue
+    const label = mode === 'auto_pr' ? 'auto-PR' : 'auto-merge'
+    store.upsertFinding({ hash: `autonomy|${trust.repo}|${trust.kind}|${mode}`, sense: 'autonomy', repo: trust.repo, kind: `grant-${mode.replace('_', '-')}`, target_kind: trust.kind, title: `Grant ${label} authority for ${trust.kind} findings in ${trust.repo}?`, detail: `${trust.accepted}/${trust.total} human decisions accepted (${Math.round(trust.rate * 100)}%); ${trust.merged} merged PR${trust.merged === 1 ? '' : 's'}.\n\n${mode === 'auto_pr' ? 'Resident will only open a PR for small (≤40 changed lines, ≤2 files), low-risk diffs. Commands still require a click.' : 'Resident may additionally squash-merge only those small low-risk auto-PRs after every required check is green and GitHub says the PR is mergeable.'}\n\nYou can revoke this authority at any time in the inbox.`, score: 60, status: 'ready' })
+  }
+}
+async function maybeAutoApprove(cfg: Config, store: Store, item: Item, repoPath: string, log: (s: string) => void) {
+  const mode = store.authority(item.repo, item.kind)
+  if ((mode !== 'auto_pr' && mode !== 'auto_merge') || !autoPrEligible(item)) return false
+  store.update(item.id, { status: 'approving', reason: 'auto-PR under earned authority (small low-risk diff)' })
+  const res = await approve(item, repoPath, applyModel(cfg)); store.addCost(res.cost)
+  if (res.ok) { store.update(item.id, { status: 'approved', pr_url: res.pr_url, cost: item.cost + res.cost, reason: 'auto-PR under earned authority (small low-risk diff)' }); notify(cfg, 'Resident: auto-PR opened', `${item.title}\n${res.pr_url}`); log(`  ✓ auto-PR: ${item.title}`) }
+  else { store.update(item.id, { status: 'failed', cost: item.cost + res.cost, reason: 'auto-PR failed — see runs log' }); log(`  ✗ auto-PR failed: ${item.title}`) }
+  return true
 }
 
 /** If the OS is denying access to the watched repos, say so loudly — a blind
@@ -89,6 +134,7 @@ function blindnessCheck(cfg: Config, store: Store) {
  *  the morning-coffee read of what accumulated while pings were quiet. `send` is injectable
  *  for tests; the flag is set before sending (a lost digest is never retried — silence > spam). */
 export function maybeDigest(cfg: Config, store: Store, log: (s: string) => void, send = notify, now = new Date()) {
+  if (cfg.silent) return
   if (!cfg.digest) return
   const t = hm(cfg.digest)
   if (Number.isNaN(t)) return
@@ -109,6 +155,13 @@ export function maybeDigest(cfg: Config, store: Store, log: (s: string) => void,
   log(`☉ digest sent (${readyCount} ready)`)
   send(cfg, 'Resident: morning digest', lines.join('\n'), { force: true })
 }
+export function maybeWeeklySummary(cfg: Config, store: Store, log: (s: string) => void, now = new Date()) {
+  if (!cfg.weeklySummary || cfg.silent || now.getDay() !== 1 || now.getHours() < 9) return
+  const week = `${now.getFullYear()}-${Math.floor((now.getTime() - new Date(now.getFullYear(), 0, 1).getTime()) / 604_800_000)}`
+  if (store.metaGet('weekly:' + week)) return
+  const c = store.outcomesSince(now.getTime() - 7 * 86_400_000)
+  store.metaSet('weekly:' + week, '1'); notify(cfg, 'Resident: weekly report', `${c.merged} PR${c.merged === 1 ? '' : 's'} merged · ${c.closed} item${c.closed === 1 ? '' : 's'} closed · ${c.autoPr} auto-PR${c.autoPr === 1 ? '' : 's'} opened`, { force: true }); log('☀ weekly report sent')
+}
 
 /** One full heartbeat: outcomes → sense → triage → investigate within budget. */
 export async function cycle(
@@ -126,7 +179,7 @@ export async function cycle(
   const archived = store.archiveOld(retention)
   if (archived > 0) log(`  🗄 archived ${archived} item(s) older than ${retention}d`)
 
-  await refreshOutcomes(store, log)
+  await refreshOutcomes(cfg, store, log)
   blindnessCheck(cfg, store)
 
   const findings = await runSenses(cfg, log)
@@ -148,6 +201,7 @@ export async function cycle(
     if (res === 'new') fresh++
   }
   log(`  ${findings.length} findings (${fresh} new)`)
+  proposeAutonomy(store)
 
   // ---- budgets
   const remainingToday = Math.max(0, cfg.budgets.perDay - store.usedToday())
@@ -162,7 +216,7 @@ export async function cycle(
         // Hard outages and blindness PIERCE quiet hours — a site down at 3am and a daemon gone
         // blind are exactly what the phone alarm exists for; only calm pings sleep.
         store.update(item.id, { status: 'ready', reason: item.sense === 'self' ? 'action needed on your Mac' : 'alert — no local repo to investigate' })
-        notify(cfg, 'Resident: alert', item.title, { force: item.kind === 'down' || item.kind === 'blind' })
+        notify(cfg, 'Resident: alert', item.title, { critical: item.kind === 'down' || item.kind === 'blind' })
         continue
       }
       // routine digs run on the cheap base model; high scores and Re-investigate earn the strong one
@@ -182,8 +236,10 @@ export async function cycle(
         }
         store.update(item.id, { status: 'ready', evidence: res.evidence, patch: res.patch, command: res.command, cost: res.cost, escalate: 0 })
         const fix = res.patch ? 'fix proposed' : res.command ? `command proposed: ${res.command}` : 'no patch'
-        log(`    → ready (${fix}, ${model}, $${res.cost.toFixed(2)})`)
-        notify(cfg, 'Resident: ready for you', `${item.title} [${item.repo}]${res.patch ? ' — fix proposed, one tap to PR' : res.command ? ` — command proposed: ${res.command}` : ''}`)
+        const ready = store.byId(item.id)!
+        const duplicateOf = res.rootCauseKey ? store.dedupe(item.id, item.repo, res.rootCauseKey) : null
+        if (duplicateOf) log(`    ↳ collapsed into finding #${duplicateOf} (same root cause)`)
+        else if (!(await maybeAutoApprove(cfg, store, ready, repo.path, log))) { log(`    → ready (${fix}, ${model}, $${res.cost.toFixed(2)})`); notify(cfg, 'Resident: ready for you', `${item.title} [${item.repo}]${res.patch ? ' — fix proposed, one tap to PR' : res.command ? ` — command proposed: ${res.command}` : ''}`) }
       } else {
         // killed/timed-out runs spend real money before dying — record the estimate so the budget ledger isn't fooled
         store.update(item.id, {
@@ -200,6 +256,7 @@ export async function cycle(
   }
 
   maybeDigest(cfg, store, log)
+  maybeWeeklySummary(cfg, store, log)
 
   log(`◉ cycle done in ${Math.round((Date.now() - t0) / 1000)}s`)
   return { findings: findings.length, new: fresh, investigated }

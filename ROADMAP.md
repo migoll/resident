@@ -79,15 +79,13 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
       before digging and write back after. Surfaced + editable in the inbox.
 - [x] **Dismissals teach**: repeated dismissal of a kind/repo dampens its score automatically
       ("you've dismissed stale-branches in tierflix 3× → auto-ignore, reversible in settings")
-- [ ] **Graduated autonomy**: per-repo, per-kind authority earned from accept-rate —
+- [x] **Graduated autonomy**: per-repo, per-kind authority earned from accept-rate —
       shadow → auto-PR (no click) → auto-merge (trivial classes, CI-green, small diffs only).
       Authority changes are themselves inbox items you approve.
-- [ ] **Noise discipline**: morning digest mode, quiet hours, weekly "what I did" summary —
+- [x] **Noise discipline**: morning digest mode, quiet hours, weekly "what I did" summary —
       Dependabot fatigue is the named enemy; silence > spam, always
-      *(progress 06-13: quiet hours + once-a-day morning digest shipped — calm pings suppressed
-      in the window; the digest, site-down/blindness alarms, and click feedback pierce it by
-      design. Remaining: weekly summary.)*
-- [ ] **Semantic dedupe**: same root cause across findings collapses into one item
+      *(completed 07-10: Silent is reversible in the inbox; Monday reports added.)*
+- [x] **Semantic dedupe**: same root cause across findings collapses into one item
 
 ## Phase 3 — Second user, then a team
 
@@ -174,6 +172,11 @@ anywhere. Open core (AGPL) + a paid hosted/relay tier.
   summary (ready items, queued count, spend) once a day, deduped on the LOCAL date so small-hours
   digest times can't double-fire in UTC+ zones. Malformed or impossible times ("25:00") fail
   noisy, never silently dead. Weekly summary still open.
+- 2026-07-10 — Phase 2 completed: per-repo/kind authority is earned from accepted outcomes and
+  granted in the inbox (shadow → bounded low-risk auto-PR → CI-green auto-merge); every grant is
+  revocable. Silent delivery is an explicit, reversible inbox setting and weekly reports summarize
+  outcomes. Investigations emit stable root-cause keys, collapsing related signals into one
+  auditable canonical card.
 - 2026-06-10 — "do better" pass: one shared proc.run() helper (kills 3 duplicated spawn wrappers;
   `stdout` kept separate from combined output so gh/git stderr warnings can't corrupt JSON parses);
   reconcile/refreshOutcomes async — gh calls no longer freeze the inbox server mid-cycle;

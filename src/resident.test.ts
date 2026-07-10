@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { commandAllowed, investigationModel, applyModel, type Config, type RepoCfg } from './config'
 import { formatCheck, exitCode, type Check } from './doctor'
-import { estimateCost, extractCommand, extractMemoryUpdate, investigationPrompt, branchFor } from './hands'
+import { estimateCost, extractCommand, extractMemoryUpdate, extractRootCauseKey, investigationPrompt, branchFor } from './hands'
 import { fileLogger } from './hygiene'
 import { scoreSentryIssue } from './senses'
 import { openStore, INVESTIGATE_THRESHOLD, MUTE_THRESHOLD } from './store'
+import { autoPrEligible, autonomyProposal } from './daemon'
 
 const CFG: Config = { intervalMinutes: 15, budgets: { perCycle: 2, perDay: 10 }, urls: [], repos: [] }
 const REPO: RepoCfg = { path: '/x', name: 'r', commands: ['bun update', 'bun install', 'bun add'] }
@@ -124,6 +125,31 @@ describe('extractCommand', () => {
   })
   test('no sh block → null (diff blocks are not commands)', () => {
     expect(extractCommand('```diff\n-a\n+b\n```')).toBeNull()
+  })
+})
+
+describe('Phase 2 autonomy and dedupe', () => {
+  test('accepts only small low-risk diffs for auto-PR', () => {
+    expect(autoPrEligible({ patch: '--- a/a\n+++ b/a\n-old\n+new', command: null, evidence: '## RISK\nlow — contained' })).toBe(true)
+    expect(autoPrEligible({ patch: '--- a/a\n+++ b/a\n-old\n+new', command: 'bun update x', evidence: '## RISK\nlow' })).toBe(false)
+  })
+  test('authority progresses only through earned thresholds', () => {
+    const s = openStore(':memory:')
+    expect(autonomyProposal(s, { repo: 'web', kind: 'typecheck', accepted: 3, dismissed: 0, merged: 2, total: 3, rate: 1 })).toBe('auto_pr')
+    s.setAuthority('web', 'typecheck', 'auto_pr')
+    expect(autonomyProposal(s, { repo: 'web', kind: 'typecheck', accepted: 6, dismissed: 0, merged: 3, total: 6, rate: 1 })).toBe('auto_merge')
+  })
+  test('canonical root keys retain related signals without a second inbox item', () => {
+    const s = openStore(':memory:')
+    for (const hash of ['a', 'b']) s.upsertFinding({ hash, sense: 'checks', repo: 'web', kind: 'typecheck', title: hash, detail: '', score: 80, status: 'ready' })
+    const [second, first] = s.items(2)
+    expect(s.dedupe(first.id, 'web', 'stale generated api client')).toBeNull()
+    expect(s.dedupe(second.id, 'web', 'stale generated api client')).toBe(first.id)
+    expect(s.items(10)).toHaveLength(1)
+    expect(s.duplicatesFor(first.id)).toHaveLength(1)
+  })
+  test('extracts explicit canonical root keys', () => {
+    expect(extractRootCauseKey('## ROOT CAUSE KEY\nStale generated API client\n## EVIDENCE')).toBe('stale generated api client')
   })
 })
 

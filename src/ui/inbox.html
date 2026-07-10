@@ -166,6 +166,13 @@
   .memory-actions { display: flex; align-items: center; gap: 9px; margin-top: 9px; }
   .memory-hint { color: var(--text2); font-size: 11.5px; }
 
+  .settings-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 13px 14px; margin-bottom: 10px; }
+  .settings-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .settings-card select, .settings-card input[type="time"] { color: var(--text); background: rgba(0,0,0,.2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; }
+  .settings-card label { color: var(--text2); font-size: 12px; }
+  .authority-line { display: flex; align-items: center; gap: 9px; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+  .authority-line:last-child { border-bottom: 0; }
+
   footer { text-align: center; color: var(--text2); font-size: 12px; padding: 30px 0 14px; opacity: 0.7; }
 </style>
 </head>
@@ -184,6 +191,12 @@
   <main>
     <div class="chips" id="chips"></div>
     <div class="chips" id="mutes" style="display:none; margin-top:-19px"></div>
+
+    <h2>Notification rhythm</h2>
+    <div id="noise"></div>
+
+    <h2>Earned authority</h2>
+    <div id="autonomy"></div>
 
     <h2>Repository memory</h2>
     <div id="memory"></div>
@@ -205,6 +218,7 @@
   const openDetails = new Set()
   const memoryBases = new Map()
   const dirtyMemory = new Set()
+  let noiseDirty = false
 
   function ago(ts) {
     const s = Math.max(0, (Date.now() - ts) / 1000)
@@ -225,6 +239,30 @@
 
   function scoreCls(s) { return s >= 80 ? 'hi' : s >= 60 ? 'mid' : 'lo' }
 
+  function renderNoise() {
+    const n = state.notifications
+    const quiet = n.quietHours || { start: '22:00', end: '08:00' }
+    $('#noise').innerHTML = '<div class="settings-card">'
+      + '<div class="settings-row"><label>Delivery <select id="noiseMode">'
+      + '<option value="immediate"' + (!n.silent && !n.digest ? ' selected' : '') + '>Immediate</option>'
+      + '<option value="morning_digest"' + (!n.silent && n.digest ? ' selected' : '') + '>Morning digest (09:00)</option>'
+      + '<option value="silent"' + (n.silent ? ' selected' : '') + '>Silent</option>'
+      + '</select></label><span class="memory-hint">Silent is reversible here; critical alerts still break through.</span></div>'
+      + '<div class="settings-row" style="margin-top:9px"><label><input id="quietEnabled" type="checkbox"' + (n.quietHours ? ' checked' : '') + '> Quiet hours</label>'
+      + '<input id="quietStart" type="time" value="' + esc(quiet.start) + '"><span class="sub">to</span><input id="quietEnd" type="time" value="' + esc(quiet.end) + '">'
+      + '<label><input id="weeklySummary" type="checkbox"' + (n.weeklySummary ? ' checked' : '') + '> Monday weekly report</label>'
+      + '<button class="btn subtle" onclick="saveNoise()">Save rhythm</button>'
+      + '</div></div>'
+  }
+
+  function renderAutonomy() {
+    const active = state.authorities || []
+    $('#autonomy').innerHTML = '<div class="settings-card">' + (active.length
+      ? active.map((a) => '<div class="authority-line"><span class="memory-name">' + esc(a.repo) + '</span><span class="tag">' + esc(a.kind) + '</span><span class="tag model">' + esc(a.mode === 'auto_pr' ? 'auto-PR' : 'auto-merge') + '</span><button class="mini" data-repo="' + esc(a.repo) + '" data-kind="' + esc(a.kind) + '" onclick="revokeAuthority(this)">revoke</button></div>').join('')
+      : '<span class="memory-hint">Shadow mode everywhere. Resident proposes authority upgrades only after enough accepted work.</span>')
+      + '</div>'
+  }
+
   function memoryCard(m) {
     const age = m.updated ? ago(m.updated) : ''
     const meta = m.updated ? (age === 'now' ? 'updated just now' : 'updated ' + age + ' ago') : 'no notes yet'
@@ -244,7 +282,9 @@
     const ru = (state && state.repoUrls && state.repoUrls[i.repo]) || null
     let actions = ''
     if (i.status === 'ready') {
-      actions = '<div class="actions">'
+      actions = i.sense === 'autonomy'
+        ? '<div class="actions"><button class="btn primary" onclick="act(' + i.id + ',\'grant_autonomy\')">Grant ' + (i.kind === 'grant-auto-merge' ? 'auto-merge' : 'auto-PR') + '</button><button class="btn subtle" onclick="act(' + i.id + ',\'dismiss\')">Keep shadow mode</button></div>'
+        : '<div class="actions">'
         + (i.patch ? '<button class="btn primary" onclick="act(' + i.id + ',\'approve\')">Approve → branch + PR</button>'
             : i.command ? (i.commandAllowed
                 ? '<button class="btn primary" onclick="act(' + i.id + ',\'approve\')">Approve → run + PR</button>'
@@ -279,9 +319,10 @@
     const hasFix = i.patch || i.command
     const detailKey = String(i.id)
     const detailOpen = openDetails.has(detailKey) || (!openDetails.has('seen:' + detailKey) && (hasFix || i.sense === 'self'))
-    const body = ev
+    let body = ev
       ? '<details data-id="' + esc(detailKey) + '"' + (detailOpen ? ' open' : '') + '><summary>Evidence' + (i.patch ? ' + proposed fix' : i.command ? ' + proposed command' : '') + '</summary><pre>' + esc(ev) + '</pre>' + fixBlock + '</details>'
       : (i.detail ? '<details data-id="' + esc(detailKey) + '"' + (detailOpen ? ' open' : '') + '><summary>Detail</summary><pre>' + esc(i.detail) + '</pre></details>' : '')
+    if (i.duplicates && i.duplicates.length) body += '<details><summary>Also covers ' + i.duplicates.length + ' related signal' + (i.duplicates.length === 1 ? '' : 's') + '</summary><pre>' + i.duplicates.map((d) => esc(d.title + ' · ' + d.sense + '/' + d.kind)).join('\n') + '</pre></details>'
 
     const repoTag = i.repo
       ? (ru ? '<a class="tag" target="_blank" href="' + esc(ru) + '">' + esc(i.repo) + ' ↗</a>' : '<span class="tag">' + esc(i.repo) + '</span>')
@@ -326,6 +367,27 @@
   }
   window.act = act
 
+  async function saveNoise() {
+    const mode = $('#noiseMode').value
+    const body = {
+      silent: mode === 'silent',
+      digest: mode === 'morning_digest' ? '09:00' : null,
+      quietHours: $('#quietEnabled').checked ? { start: $('#quietStart').value, end: $('#quietEnd').value } : null,
+      weeklySummary: $('#weeklySummary').checked,
+    }
+    const r = await fetch('/api/notifications', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const result = await r.json()
+    if (!result.ok) alert(result.error || 'Could not save notification rhythm')
+    else { noiseDirty = false; await refresh() }
+  }
+  window.saveNoise = saveNoise
+
+  async function revokeAuthority(button) {
+    await fetch('/api/autonomy', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repo: button.dataset.repo, kind: button.dataset.kind, mode: 'shadow' }) })
+    refresh()
+  }
+  window.revokeAuthority = revokeAuthority
+
   async function saveMemory(button) {
     const card = button.closest('.memory-card')
     const notes = card.querySelector('textarea').value
@@ -349,6 +411,8 @@
     if (textarea.value === (memoryBases.get(repo)?.notes ?? '')) dirtyMemory.delete(repo)
     else dirtyMemory.add(repo)
   })
+  document.addEventListener('input', (e) => { if (e.target.closest('#noise')) noiseDirty = true })
+  document.addEventListener('change', (e) => { if (e.target.closest('#noise')) noiseDirty = true })
 
   // ---- watchlist editing
   let adding = false
@@ -430,6 +494,8 @@
       + (state.costToday ? ' · $' + state.costToday.toFixed(2) + ' AI usage (investigations + approvals)' : '')
 
     if (!adding) renderChips()
+    if (!noiseDirty) renderNoise()
+    renderAutonomy()
     // Never replace unsaved notebook edits; the inbox poll must not eat a thought mid-sentence.
     if (!dirtyMemory.size) renderMemory()
     renderMutes()

@@ -26,10 +26,12 @@ export function inQuietHours(cfg: Config, now = new Date()): boolean {
  *  Fire-and-forget: notification failures must never break a cycle.
  *  Quiet hours suppress everything except force (the digest the user explicitly scheduled) —
  *  the inbox still records it all; pings are a convenience layer, not the record. */
-export async function notify(cfg: Config, title: string, body: string, opts: { force?: boolean } = {}) {
+export async function notify(cfg: Config, title: string, body: string, opts: { force?: boolean; critical?: boolean } = {}) {
   const url = cfg.notify
   if (!url) return
-  if (!opts.force && inQuietHours(cfg)) return
+  // Silent is an explicit, reversible choice: only hard blind/down alarms pierce it.
+  if (cfg.silent && !opts.critical) return
+  if (!opts.force && !opts.critical && inQuietHours(cfg)) return
   try {
     if (url.includes('hooks.slack.com')) {
       await fetch(url, {
